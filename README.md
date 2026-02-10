@@ -60,10 +60,10 @@ DicomImage     (concrete)
 ### File Handling Layer
 
 ```cpp
-IMedicalFileHandler   (abstract)
+FileHandling   (abstract)
    ▲
    │
-GDCMFileHandler       (DICOM)
+GDCMFileHandling       (DICOM)
 ```
 
 * File loaders return `std::unique_ptr<MedicalImage>`
@@ -116,7 +116,7 @@ GDCMFileHandler       (DICOM)
 ## 🧪 Build Instructions
 
 ```bash
-git clone https://github.com/<your-username>/DicomViewer.git
+git clone https://github.com/Gokulakrishh/DicomViewer.git
 cd DicomViewer
 
 mkdir build
@@ -131,7 +131,7 @@ cmake --build .
 
 ## 🎯 Motivation
 
-This project is built as a **portfolio-quality system**, focusing on:
+This project is built as a hobby project, focusing on:
 
 * modern C++ practices
 * clean, testable architecture
