@@ -148,26 +148,3 @@ MIT License
 
 ---
 
-## 💡 Why this README works well
-
-- Looks **professional on GitHub**
-- Reads well for **recruiters**
-- Signals **architecture awareness**
-- Makes your future Ollama idea look intentional (not random)
-
----
-
-### Next upgrades (optional but 🔥):
-- Add screenshots section
-- Add architecture diagram (SVG)
-- Add “Why this matters in medical imaging” paragraph
-- Add CI badge later
-
-If you want, I can:
-- tailor this **specifically for LinkedIn**
-- add a **Screenshots** section template
-- write a **“Technical Highlights”** section recruiters love
-- or help you plan the **Ollama integration cleanly**
-
-Just say the word.
-```
