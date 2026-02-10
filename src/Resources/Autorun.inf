@@ -1,0 +1,5 @@
+[autorun]
+OPEN=autorun.exe /autorun
+ICON=autorun.exe,0
+SHELL\start\COMMAND=autorun.exe /autorun
+SHELL\start=Start syngo fastView
