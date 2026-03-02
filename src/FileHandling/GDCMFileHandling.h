@@ -4,11 +4,11 @@
 #include <memory>
 #include <QStringList>
 
-class GDCMFileHandler: public FileHandling
+class GDCMFileHandling: public FileHandling
 {
     
 public:
-    GDCMFileHandler();
+    GDCMFileHandling();
     std::unique_ptr<MedicalImage> loadImage(const QString& filePath) override;
     QStringList getSupportedFormats() const override;
     bool canLoad(const QString& filePath) const override;

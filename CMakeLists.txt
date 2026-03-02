@@ -22,7 +22,9 @@ set(CMAKE_AUTOUIC ON)
 # ----------------------------
 # Find dependencies
 # ----------------------------
-find_package(Qt5 REQUIRED COMPONENTS Core Gui Widgets)
+find_package(Boost REQUIRED)
+
+find_package(Qt5 REQUIRED COMPONENTS Core Gui Widgets Sql)
 message(STATUS "Qt version: ${QT_VERSION}")
 
 find_package(VTK REQUIRED)
@@ -40,18 +42,26 @@ message(STATUS "OpenCV version: ${OpenCV_VERSION}")
 set(SRC_FILES
     src/Main/main.cpp
     src/FileHandling/GDCMFileHandling.cpp
-    src/DicomViewerWindow/DicomViewerWindow.cpp
-    src/DicomViewerWindow/DicomViewerWindow.ui
+    src/DicomViewerWindow/DicomMainWindow.cpp
+    src/DicomViewerWindow/DicomGraphicsView.cpp
+    src/DicomViewerWindow/DicomMainWindow.ui
     src/VTKwidget/VTKwidget.cpp
+    src/Database/PostgreConnection.cpp
+    src/Database/PostgreService.cpp
 )
-
 set(HEADER_FILES
     src/Model/MedicalImage.h
     src/Model/DicomImage.h
+    src/Model/DicomParameters.h
     src/FileHandling/FileHandling.h
     src/FileHandling/GDCMFileHandling.h
-    src/DicomViewerWindow/DicomViewerWindow.h
+    src/DicomViewerWindow/DicomMainWindow.h
+    src/DicomViewerWindow/DicomGraphicsView.h
     src/VTKwidget/VTKwidget.h
+    src/Database/DatabaseConnection.h
+    src/Database/PostgreConnection.h
+    src/Database/DatabaseService.h
+    src/Database/PostgreService.h
 )
 
 # ----------------------------
@@ -67,6 +77,8 @@ add_executable(${PROJECT_NAME}
 # ----------------------------
 target_include_directories(${PROJECT_NAME} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
+        /usr/include/gdcm-3.0
+        ${Boost_INCLUDE_DIRS}
 )
 
 # ----------------------------
@@ -77,9 +89,14 @@ target_link_libraries(${PROJECT_NAME}
         Qt5::Core
         Qt5::Gui
         Qt5::Widgets
+        Qt5::Sql
         ${OpenCV_LIBS}
         ${VTK_LIBRARIES}
     	${GDCM_LIBRARIES}
+        gdcmCommon
+        gdcmMSFF
+        gdcmIOD
+        gdcmDSED
 )
 
 # ---------------------------
