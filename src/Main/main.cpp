@@ -1,14 +1,13 @@
-#include <QGuiApplication>
-#include <QStyleFactory>
+#include <QApplication>
+#include <QDebug>
 #include <QPalette>
 #include <QSqlDatabase>
-#include <QDebug>
+#include <QStyleFactory>
+
 #include "DicomViewerWindow/DicomMainWindow.h"
 
-
-int main(int argc, char *argv[])
+int main(int argc, char* argv[])
 {
-
     QApplication app(argc, argv);
 
     app.setApplicationName("Dicom Image Viewer (2D/3D)");
@@ -29,7 +28,6 @@ int main(int argc, char *argv[])
     darkPalette.setColor(QPalette::Highlight, QColor(42, 130, 218));
     darkPalette.setColor(QPalette::HighlightedText, Qt::black);
     app.setPalette(darkPalette);
-    //app.setWindowIcon(QIcon(":/resources/dicom.ico"));
 
     qDebug() << QSqlDatabase::drivers();
     DicomMainWindow dicom;
