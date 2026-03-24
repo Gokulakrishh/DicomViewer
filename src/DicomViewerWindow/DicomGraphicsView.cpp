@@ -1,5 +1,8 @@
 #include "DicomGraphicsView.h"
-#include "Model/DicomImage.h"
+
+#include "Model/MedicalImage.h"
+
+#include <QPainter>
 
 DicomGraphicsView::DicomGraphicsView(QWidget* parent)
     : QGraphicsView(parent)
@@ -14,9 +17,10 @@ DicomGraphicsView::DicomGraphicsView(QWidget* parent)
     setDragMode(QGraphicsView::ScrollHandDrag);
     setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
 }
-void DicomGraphicsView::setImage(const std::shared_ptr<DicomImage>& image)
+
+void DicomGraphicsView::setImage(std::shared_ptr<MedicalImage> image)
 {
-    m_image = image;
+    m_image = std::move(image);
     updatePixmap();
 }
 
@@ -24,6 +28,8 @@ void DicomGraphicsView::clearImage()
 {
     m_image.reset();
     m_pixmapItem->setPixmap(QPixmap());
+    resetTransform();
+    m_zoomFactor = 1.0;
 }
 
 void DicomGraphicsView::wheelEvent(QWheelEvent* event)
@@ -41,28 +47,19 @@ void DicomGraphicsView::wheelEvent(QWheelEvent* event)
         m_zoomFactor /= scaleFactor;
     }
 }
+
 void DicomGraphicsView::updatePixmap()
 {
     if (!m_image || !m_image->isValid())
     {
-        m_pixmapItem->setPixmap(QPixmap());
+        clearImage();
         return;
     }
 
-    const auto& data = m_image->pixelData();
-
-    QImage img(reinterpret_cast<const uchar*>(data.data()),
-               m_image->width(),
-               m_image->height(),
-               QImage::Format_Grayscale16);
-
-    QPixmap pixmap = QPixmap::fromImage(img.copy());
-
+    const QPixmap pixmap = m_image->pixmap();
     m_pixmapItem->setPixmap(pixmap);
     m_scene->setSceneRect(pixmap.rect());
-
+    resetTransform();
     fitInView(m_scene->sceneRect(), Qt::KeepAspectRatio);
-
     m_zoomFactor = 1.0;
 }
-
