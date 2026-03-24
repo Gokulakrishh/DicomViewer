@@ -1,9 +1,10 @@
 #include "Database/PostgreConnection.h"
 
 #include <QSqlQuery>
+#include <QUuid>
 
 PostgreConnection::PostgreConnection()
-    : m_connectionName("DicomViewerPostgreConnection")
+    : m_connectionName(QString("DicomViewerPostgreConnection_%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces)))
 {
     m_db = QSqlDatabase::addDatabase("QPSQL", m_connectionName);
 }
