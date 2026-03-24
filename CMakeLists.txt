@@ -22,8 +22,6 @@ set(CMAKE_AUTOUIC ON)
 # ----------------------------
 # Find dependencies
 # ----------------------------
-find_package(Boost REQUIRED)
-
 find_package(Qt5 REQUIRED COMPONENTS Core Gui Widgets Sql)
 message(STATUS "Qt version: ${QT_VERSION}")
 
@@ -78,7 +76,6 @@ add_executable(${PROJECT_NAME}
 target_include_directories(${PROJECT_NAME} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         /usr/include/gdcm-3.0
-        ${Boost_INCLUDE_DIRS}
 )
 
 # ----------------------------
