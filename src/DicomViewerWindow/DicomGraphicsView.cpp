@@ -20,7 +20,7 @@ DicomGraphicsView::DicomGraphicsView(QWidget* parent)
 
 void DicomGraphicsView::setImage(const std::shared_ptr<DicomImage>& image)
 {
-    m_image = image;
+    m_image = std::move(image);
     updatePixmap();
 }
 
@@ -28,6 +28,8 @@ void DicomGraphicsView::clearImage()
 {
     m_image.reset();
     m_pixmapItem->setPixmap(QPixmap());
+    resetTransform();
+    m_zoomFactor = 1.0;
 }
 
 void DicomGraphicsView::wheelEvent(QWheelEvent* event)
@@ -50,7 +52,7 @@ void DicomGraphicsView::updatePixmap()
 {
     if (!m_image || !m_image->isValid())
     {
-        m_pixmapItem->setPixmap(QPixmap());
+        clearImage();
         return;
     }
 
