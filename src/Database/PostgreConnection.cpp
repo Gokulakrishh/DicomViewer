@@ -1,10 +1,9 @@
 #include "Database/PostgreConnection.h"
 
 #include <QSqlQuery>
-#include <QUuid>
 
 PostgreConnection::PostgreConnection()
-    : m_connectionName(QString("DicomViewerPostgreConnection_%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces)))
+    : m_connectionName("DicomViewerPostgreConnection")
 {
     m_db = QSqlDatabase::addDatabase("QPSQL", m_connectionName);
 }
@@ -53,26 +52,5 @@ void PostgreConnection::execute(const QString& sqlQuery)
 
 bool PostgreConnection::doesTableExist(const QString& name)
 {
-    if (!m_db.isValid() || !m_db.isOpen())
-    {
-        return false;
-    }
-
-    QSqlQuery query(m_db);
-    query.prepare(R"(
-        SELECT EXISTS (
-            SELECT 1
-            FROM information_schema.tables
-            WHERE table_schema = current_schema()
-              AND table_name = :table_name
-        )
-    )");
-    query.bindValue(":table_name", name);
-
-    if (!query.exec() || !query.next())
-    {
-        return false;
-    }
-
-    return query.value(0).toBool();
+    return m_db.isValid() && m_db.tables().contains(name);
 }

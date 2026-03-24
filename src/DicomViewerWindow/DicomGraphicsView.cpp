@@ -1,6 +1,6 @@
 #include "DicomGraphicsView.h"
 
-#include "Model/MedicalImage.h"
+#include "Model/DicomImage.h"
 
 #include <QPainter>
 
@@ -18,7 +18,7 @@ DicomGraphicsView::DicomGraphicsView(QWidget* parent)
     setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
 }
 
-void DicomGraphicsView::setImage(std::shared_ptr<MedicalImage> image)
+void DicomGraphicsView::setImage(const std::shared_ptr<DicomImage>& image)
 {
     m_image = std::move(image);
     updatePixmap();
@@ -59,7 +59,6 @@ void DicomGraphicsView::updatePixmap()
     const QPixmap pixmap = m_image->pixmap();
     m_pixmapItem->setPixmap(pixmap);
     m_scene->setSceneRect(pixmap.rect());
-    resetTransform();
     fitInView(m_scene->sceneRect(), Qt::KeepAspectRatio);
     m_zoomFactor = 1.0;
 }

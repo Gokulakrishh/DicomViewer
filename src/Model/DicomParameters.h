@@ -2,87 +2,72 @@
 
 #include "Model/DicomImage.h"
 
+#include <QHash>
 #include <QString>
 #include <QVector>
-#include <cstddef>
 #include <memory>
-#include <unordered_map>
-
-struct QStringHash
-{
-    std::size_t operator()(const QString& value) const noexcept
-    {
-        return static_cast<std::size_t>(qHash(value));
-    }
-};
 
 class Series
 {
 public:
-    using ImagePtr = std::shared_ptr<DicomImage>;
-
     QString seriesInstanceUID;
     QString seriesDescription;
     QString modality;
     QString seriesNumber;
 
-    void addImage(ImagePtr img)
+    void addImage(std::unique_ptr<DicomImage> img)
     {
         images.push_back(std::move(img));
     }
 
 private:
-    QVector<ImagePtr> images;
+    QVector<std::unique_ptr<DicomImage>> images;
 };
 
 class Study
 {
 public:
-    using SeriesPtr = std::shared_ptr<Series>;
-
     QString studyInstanceUID;
     QString studyDescription;
     QString studyDate;
     QString doctorName;
 
-    SeriesPtr getOrCreateSeries(const QString& seriesUID)
+    Series& getOrCreateSeries(const QString& seriesUID)
     {
-        auto [it, inserted] = seriesMap.try_emplace(seriesUID, nullptr);
-        if (inserted)
+        auto it = seriesMap.find(seriesUID);
+        if (it == seriesMap.end())
         {
-            auto series = std::make_shared<Series>();
+            auto series = std::make_unique<Series>();
             series->seriesInstanceUID = seriesUID;
-            it->second = std::move(series);
+            it = seriesMap.insert(seriesUID, std::move(series));
         }
-        return it->second;
+        return *it.value();
     }
 
 private:
-    std::unordered_map<QString, SeriesPtr, QStringHash> seriesMap;
+    QHash<QString, std::unique_ptr<Series>> seriesMap;
 };
 
 class Patient
 {
 public:
-    using StudyPtr = std::shared_ptr<Study>;
-
     QString patientID;
     QString patientName;
     QString patientSex;
     QString dateOfBirth;
 
-    StudyPtr getOrCreateStudy(const QString& studyUID)
+    Study& getOrCreateStudy(const QString& studyUID)
     {
-        auto [it, inserted] = studyMap.try_emplace(studyUID, nullptr);
-        if (inserted)
+        auto it = studyMap.find(studyUID);
+        if (it == studyMap.end())
         {
-            auto study = std::make_shared<Study>();
+            auto study = std::make_unique<Study>();
             study->studyInstanceUID = studyUID;
-            it->second = std::move(study);
+            it = studyMap.insert(studyUID, std::move(study));
         }
-        return it->second;
+        return *it.value();
     }
 
 private:
-    std::unordered_map<QString, StudyPtr, QStringHash> studyMap;
+    QHash<QString, std::unique_ptr<Study>> studyMap;
 };
