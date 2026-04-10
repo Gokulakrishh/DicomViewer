@@ -12,16 +12,18 @@ public:
     using PatientPtr = std::shared_ptr<Patient>;
     using StudyPtr = std::shared_ptr<Study>;
     using SeriesPtr = std::shared_ptr<Series>;
+    using DicomImagePtr = std::shared_ptr<DicomImage>;
 
     virtual ~DatabaseService() = default;
 
-    virtual void savePatient(const PatientPtr& patient) = 0;
-    virtual PatientPtr getPatient(const QString& patientID) = 0;
+    virtual bool initialize() = 0;
+    virtual QString lastErrorText() const = 0;
+
+    virtual bool savePatient(const PatientPtr& patient) = 0;
+    virtual PatientPtr getPatient(const QString& patientId) = 0;
     virtual QList<PatientPtr> getAllPatients() = 0;
 
-    virtual void saveStudy(const StudyPtr& study) = 0;
-    virtual StudyPtr getStudy(const QString& studyUID) = 0;
-
-    virtual void saveSeries(const SeriesPtr& series) = 0;
-    virtual SeriesPtr getSeries(const QString& seriesUID) = 0;
+    virtual StudyPtr getStudy(const QString& studyInstanceUid) = 0;
+    virtual SeriesPtr getSeries(const QString& seriesInstanceUid) = 0;
+    virtual DicomImagePtr getImage(const QString& sopInstanceUid) = 0;
 };

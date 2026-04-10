@@ -1,19 +1,28 @@
 #pragma once
 
+#include "Config/DatabaseSettings.h"
 #include "Database/DatabaseConnection.h"
+
 #include <QSqlDatabase>
 #include <QString>
 
-class PostgreConnection : public DatabaseConnection
+class PostgreConnection final : public DatabaseConnection
 {
 public:
-    PostgreConnection();
-    ~PostgreConnection();
+    explicit PostgreConnection(const DatabaseSettings& databaseSettings);
+    ~PostgreConnection() override;
+
+    bool isConfigured() const;
     bool openDB() override;
     bool closeDB() override;
     void execute(const QString& sqlQuery) override;
     bool doesTableExist(const QString& name) override;
+
+    QSqlDatabase database() const;
+    QString lastErrorText() const;
+
 private:
-    QSqlDatabase m_db; //since we are using internal database, dont need to set/get hostname, passwor and so
+    QSqlDatabase m_db;
     QString m_connectionName;
+    QString m_lastErrorText;
 };

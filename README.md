@@ -7,6 +7,7 @@
 The project focuses on **separating UI from business logic**, making it easy to support:
 - new medical image formats
 - multiple rendering backends
+- PostgreSQL-backed DICOM indexing
 - future AI / LLM-assisted workflows
 
 ---
@@ -28,8 +29,9 @@ This is not a monolithic viewer — it’s a **foundation**.
 
 DicomViewer/
 ├── src/
-│   ├── Model/                 # Domain models (MedicalImage, DicomImage)
+│   ├── Model/                 # Domain models (Patient, Study, Series, DicomImage)
 │   ├── FileHandling/          # File loaders (GDCMFileHandler, interfaces)
+│   ├── Database/              # PostgreSQL persistence services
 │   ├── DicomViewerWindow/     # Qt UI (MainWindow, .ui files)
 │   └── Main/                  # Application entry point
 ├── build/                     # Build directory (ignored)
@@ -43,17 +45,18 @@ DicomViewer/
 
 ## 🏗️ Architecture
 
-### Model Layer
+### Domain Layer
 ```cpp
-MedicalImage   (abstract)
-   ▲
-   │
-DicomImage     (concrete)
+Patient
+  └── Study
+        └── Series
+              └── DicomImage
 ````
 
-* `MedicalImage` defines the **minimal contract**
-* `DicomImage` implements DICOM-specific logic
-* UI never depends on concrete image types
+* `MedicalImage` stays focused on image concerns
+* `DicomImage` stores only image-level data
+* patient / study / series are modeled separately to match DICOM hierarchy
+* UI depends on abstractions, not PostgreSQL details
 
 ---
 
@@ -82,6 +85,7 @@ GDCMFileHandling       (DICOM)
 ## 🔬 Current Features
 
 * ✅ DICOM loading via **GDCM**
+* ✅ PostgreSQL persistence for patient / study / series / image hierarchy
 * ✅ Qt Widgets UI
 * ✅ Clean separation of concerns
 * ✅ CMake-based cross-platform build
@@ -106,10 +110,10 @@ GDCMFileHandling       (DICOM)
 
 * **C++20**
 * **CMake ≥ 3.21**
-* **Qt 5** (Core, Gui, Widgets)
-* **VTK**
+* **Qt 6** (Core, Gui, Widgets, Sql)
 * **GDCM**
 * **OpenCV ≥ 4.6**
+* **PostgreSQL** with Qt `QPSQL` driver
 
 ---
 
@@ -126,6 +130,47 @@ cmake ..
 cmake --build .
 ./DicomViewer
 ```
+
+If Qt 6 is installed in a custom location, configure CMake with `CMAKE_PREFIX_PATH`, for example:
+
+```bash
+cmake -S . -B build -DCMAKE_PREFIX_PATH=/home/dust/Qt/6.5.3/gcc_64
+cmake --build build
+```
+
+## 🗄️ PostgreSQL Configuration
+
+The application stores imported DICOM files in a normalized hierarchy:
+
+* `patients`
+* `studies`
+* `series`
+* `dicom_images`
+
+PostgreSQL settings are read at runtime through `QSettings` from `config.ini`.
+
+When running from `build-qt6`, the app looks for:
+
+* `build-qt6/config.ini`
+* then `../config.ini` relative to the executable, which resolves to the repo-root [`config.ini`](/home/dust/Documents/DicomViewer/config.ini)
+
+Fill in the database section before launching:
+
+```ini
+[database]
+hostName=127.0.0.1
+port=5432
+databaseName=dicomviewer
+userName=postgres
+password=your_password
+```
+
+When an image is opened, the app:
+
+* loads the pixel data for viewing
+* parses the DICOM hierarchy as `Patient -> Study -> Series -> DicomImage`
+* upserts the hierarchy into PostgreSQL
+* stores a PNG preview in `dicom_images` for quick reload
 
 ---
 
@@ -147,4 +192,3 @@ MIT License
 ```
 
 ---
-

@@ -22,11 +22,9 @@ set(CMAKE_AUTOUIC ON)
 # ----------------------------
 # Find dependencies
 # ----------------------------
-find_package(Qt5 REQUIRED COMPONENTS Core Gui Widgets Sql)
-message(STATUS "Qt version: ${QT_VERSION}")
-
-find_package(VTK REQUIRED)
-message(STATUS "VTK")
+find_package(QT NAMES Qt6 REQUIRED COMPONENTS Core Gui Widgets Sql)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Gui Widgets Sql)
+message(STATUS "Qt major version: ${QT_VERSION_MAJOR}")
 
 find_package(GDCM REQUIRED)
 message(STATUS "GDCM")
@@ -39,15 +37,19 @@ message(STATUS "OpenCV version: ${OpenCV_VERSION}")
 # ----------------------------
 set(SRC_FILES
     src/Main/main.cpp
+    src/Config/QSettingsDatabaseConfigService.cpp
     src/FileHandling/GDCMFileHandling.cpp
     src/DicomViewerWindow/DicomMainWindow.cpp
     src/DicomViewerWindow/DicomGraphicsView.cpp
     src/DicomViewerWindow/DicomMainWindow.ui
+    src/UI/WarningDialogService.cpp
     src/VTKwidget/VTKwidget.cpp
     src/Database/PostgreConnection.cpp
     src/Database/PostgreService.cpp
 )
 set(HEADER_FILES
+    src/Config/DatabaseSettings.h
+    src/Config/QSettingsDatabaseConfigService.h
     src/Model/MedicalImage.h
     src/Model/DicomImage.h
     src/Model/DicomParameters.h
@@ -55,6 +57,7 @@ set(HEADER_FILES
     src/FileHandling/GDCMFileHandling.h
     src/DicomViewerWindow/DicomMainWindow.h
     src/DicomViewerWindow/DicomGraphicsView.h
+    src/UI/WarningDialogService.h
     src/VTKwidget/VTKwidget.h
     src/Database/DatabaseConnection.h
     src/Database/PostgreConnection.h
@@ -83,26 +86,16 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 # ----------------------------
 target_link_libraries(${PROJECT_NAME}
     PRIVATE
-        Qt5::Core
-        Qt5::Gui
-        Qt5::Widgets
-        Qt5::Sql
+        Qt${QT_VERSION_MAJOR}::Core
+        Qt${QT_VERSION_MAJOR}::Gui
+        Qt${QT_VERSION_MAJOR}::Widgets
+        Qt${QT_VERSION_MAJOR}::Sql
         ${OpenCV_LIBS}
-        ${VTK_LIBRARIES}
     	${GDCM_LIBRARIES}
         gdcmCommon
         gdcmMSFF
         gdcmIOD
         gdcmDSED
-)
-
-# ---------------------------
-# Auto-initializes VTK module factories at runtime
-# Modern modular VTK requires it to avoid crashes
-# ---------------------------
-vtk_module_autoinit(
-    TARGETS DicomViewer
-    MODULES ${VTK_LIBRARIES}
 )
 
 # ----------------------------

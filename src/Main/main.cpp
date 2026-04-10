@@ -1,7 +1,5 @@
 #include <QApplication>
-#include <QDebug>
 #include <QPalette>
-#include <QSqlDatabase>
 #include <QStyleFactory>
 
 #include "DicomViewerWindow/DicomMainWindow.h"
@@ -29,7 +27,6 @@ int main(int argc, char* argv[])
     darkPalette.setColor(QPalette::HighlightedText, Qt::black);
     app.setPalette(darkPalette);
 
-    qDebug() << QSqlDatabase::drivers();
     DicomMainWindow dicom;
     dicom.show();
     return app.exec();
