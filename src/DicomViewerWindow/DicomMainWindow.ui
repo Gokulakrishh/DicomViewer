@@ -47,25 +47,39 @@
          </widget>
         </item>
         <item>
-         <widget class="QPushButton" name="playButton">
+         <widget class="QCheckBox" name="cineCheckBox">
           <property name="sizePolicy">
            <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
             <horstretch>0</horstretch>
             <verstretch>0</verstretch>
            </sizepolicy>
           </property>
-          <property name="maximumSize">
-           <size>
-            <width>20</width>
-            <height>20</height>
-           </size>
-          </property>
           <property name="text">
            <string/>
           </property>
          </widget>
         </item>
+        <item>
+         <widget class="QLabel" name="cineLabel">
+          <property name="text">
+           <string>Play</string>
+          </property>
+          <property name="alignment">
+           <set>Qt::AlignHCenter|Qt::AlignTop</set>
+          </property>
+         </widget>
+        </item>
        </layout>
+      </item>
+      <item>
+       <widget class="QFrame" name="viewerControlsSeparator">
+        <property name="frameShape">
+         <enum>QFrame::VLine</enum>
+        </property>
+        <property name="frameShadow">
+         <enum>QFrame::Sunken</enum>
+        </property>
+       </widget>
       </item>
      </layout>
     </item>

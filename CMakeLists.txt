@@ -22,8 +22,8 @@ set(CMAKE_AUTOUIC ON)
 # ----------------------------
 # Find dependencies
 # ----------------------------
-find_package(QT NAMES Qt6 REQUIRED COMPONENTS Core Gui Widgets Sql)
-find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Gui Widgets Sql)
+find_package(QT NAMES Qt6 REQUIRED COMPONENTS Core Gui Widgets Sql Concurrent)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Gui Widgets Sql Concurrent)
 message(STATUS "Qt major version: ${QT_VERSION_MAJOR}")
 
 find_package(GDCM REQUIRED)
@@ -42,6 +42,10 @@ set(SRC_FILES
     src/DicomViewerWindow/DicomMainWindow.cpp
     src/DicomViewerWindow/DicomGraphicsView.cpp
     src/DicomViewerWindow/DicomMainWindow.ui
+    src/DicomViewerWindow/MeasurementController.cpp
+    src/DicomViewerWindow/DicomViewportController.cpp
+    src/DicomViewerWindow/DicomRenderService.cpp
+    src/DicomViewerWindow/ViewportSession.cpp
     src/UI/WarningDialogService.cpp
     src/VTKwidget/VTKwidget.cpp
     src/Database/PostgreConnection.cpp
@@ -57,6 +61,10 @@ set(HEADER_FILES
     src/FileHandling/GDCMFileHandling.h
     src/DicomViewerWindow/DicomMainWindow.h
     src/DicomViewerWindow/DicomGraphicsView.h
+    src/DicomViewerWindow/MeasurementController.h
+    src/DicomViewerWindow/DicomViewportController.h
+    src/DicomViewerWindow/DicomRenderService.h
+    src/DicomViewerWindow/ViewportSession.h
     src/UI/WarningDialogService.h
     src/VTKwidget/VTKwidget.h
     src/Database/DatabaseConnection.h
@@ -90,6 +98,7 @@ target_link_libraries(${PROJECT_NAME}
         Qt${QT_VERSION_MAJOR}::Gui
         Qt${QT_VERSION_MAJOR}::Widgets
         Qt${QT_VERSION_MAJOR}::Sql
+        Qt${QT_VERSION_MAJOR}::Concurrent
         ${OpenCV_LIBS}
     	${GDCM_LIBRARIES}
         gdcmCommon
@@ -124,6 +133,12 @@ if (APPLE)
     set_target_properties(${PROJECT_NAME} PROPERTIES
         MACOSX_BUNDLE ON
     )
+
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_CURRENT_SOURCE_DIR}/config.ini
+            $<TARGET_BUNDLE_CONTENT_DIR:${PROJECT_NAME}>/MacOS/config.ini
+    )
 endif()
 
 
@@ -131,5 +146,6 @@ endif()
 # Install (optional)
 # ----------------------------
 install(TARGETS ${PROJECT_NAME}
+    BUNDLE DESTINATION .
     RUNTIME DESTINATION bin
     )

@@ -25,6 +25,7 @@ public:
         m_images.push_back(std::move(img));
     }
 
+    std::vector<std::unique_ptr<DicomImage>>& images() { return m_images; }
     const std::vector<std::unique_ptr<DicomImage>>& images() const { return m_images; }
 
 private:

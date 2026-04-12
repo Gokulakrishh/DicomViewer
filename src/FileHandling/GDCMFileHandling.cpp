@@ -1,5 +1,6 @@
 #include "GDCMFileHandling.h"
 
+#include "DicomViewerWindow/DicomRenderService.h"
 #include "Model/DicomImage.h"
 
 #include <QDate>
@@ -14,6 +15,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <gdcmImage.h>
 #include <gdcmPhotometricInterpretation.h>
 #include <gdcmTag.h>
@@ -93,7 +95,21 @@ std::unique_ptr<MedicalImage> GDCMFileHandling::loadImage(const QString& filePat
         return nullptr;
     }
 
-    return loadDicomImage(filePath, reader);
+    return loadDicomImage(filePath, reader, true);
+}
+
+std::unique_ptr<DicomImage> GDCMFileHandling::loadImageData(const QString& filePath) const
+{
+    gdcm::ImageReader reader;
+    reader.SetFileName(filePath.toStdString().c_str());
+
+    if (!reader.Read())
+    {
+        qDebug() << "Failed to read DICOM file:" << filePath;
+        return nullptr;
+    }
+
+    return loadDicomImage(filePath, reader, false);
 }
 
 FileHandling::PatientPtr GDCMFileHandling::loadDicomHierarchy(const QString& filePath)
@@ -216,7 +232,10 @@ QString GDCMFileHandling::readStringTag(const gdcm::StringFilter& stringFilter, 
     return value;
 }
 
-std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(const QString& filePath, const gdcm::ImageReader& reader) const
+std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(
+    const QString& filePath,
+    const gdcm::ImageReader& reader,
+    bool renderPixmap) const
 {
     const gdcm::Image& gdcmImage = reader.GetImage();
     const unsigned int width = gdcmImage.GetDimensions()[0];
@@ -235,7 +254,48 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(const QString& file
         return nullptr;
     }
 
+    gdcm::StringFilter stringFilter;
+    stringFilter.SetFile(reader.GetFile());
+
+    const auto readNumericTagValue = [this, &stringFilter](uint16_t group, uint16_t element, double fallbackValue) {
+        const QString tagValue = readStringTag(stringFilter, group, element);
+        if (tagValue.isEmpty())
+        {
+            return fallbackValue;
+        }
+
+        const QString firstComponent = tagValue.split('\\').value(0).trimmed();
+        bool isDouble = false;
+        const double parsedValue = firstComponent.toDouble(&isDouble);
+        return isDouble ? parsedValue : fallbackValue;
+    };
+    const auto readPixelSpacingValues = [this, &stringFilter]() {
+        const QString tagValue = readStringTag(stringFilter, 0x0028, 0x0030);
+        const QStringList components = tagValue.split('\\', Qt::SkipEmptyParts);
+        if (components.size() < 2)
+        {
+            return QPair<double, double>(0.0, 0.0);
+        }
+
+        bool rowOk = false;
+        bool columnOk = false;
+        const double rowSpacing = components.at(0).trimmed().toDouble(&rowOk);
+        const double columnSpacing = components.at(1).trimmed().toDouble(&columnOk);
+        if (!rowOk || !columnOk || rowSpacing <= 0.0 || columnSpacing <= 0.0)
+        {
+            return QPair<double, double>(0.0, 0.0);
+        }
+
+        return QPair<double, double>(columnSpacing, rowSpacing);
+    };
+
     QImage image;
+    QVector<int> rawPixels;
+    bool isMonochromeImage = false;
+    int minimumStoredValue = 0;
+    int maximumStoredValue = 255;
+    int defaultWindowLevel = 0;
+    int defaultWindowWidth = 255;
     if (samplesPerPixel == 3 && bitsAllocated <= 8)
     {
         image = QImage(
@@ -249,6 +309,7 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(const QString& file
     }
     else if (samplesPerPixel == 1 && bitsAllocated <= 8)
     {
+        isMonochromeImage = true;
         image = QImage(
                     reinterpret_cast<const uchar*>(buffer.constData()),
                     static_cast<int>(width),
@@ -256,35 +317,41 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(const QString& file
                     static_cast<int>(width),
                     QImage::Format_Grayscale8)
                     .copy();
+
+        const int pixelCount = static_cast<int>(width * height);
+        rawPixels.resize(pixelCount);
+        minimumStoredValue = std::numeric_limits<int>::max();
+        maximumStoredValue = std::numeric_limits<int>::min();
+        const auto* pixelData = reinterpret_cast<const uint8_t*>(buffer.constData());
+        for (int index = 0; index < pixelCount; ++index)
+        {
+            const int value = static_cast<int>(pixelData[index]);
+            rawPixels[index] = value;
+            minimumStoredValue = std::min(minimumStoredValue, value);
+            maximumStoredValue = std::max(maximumStoredValue, value);
+        }
     }
     else if (samplesPerPixel == 1 && bitsAllocated <= 16)
     {
+        isMonochromeImage = true;
         image = QImage(static_cast<int>(width), static_cast<int>(height), QImage::Format_Grayscale8);
 
         const int pixelCount = static_cast<int>(width * height);
-        int minimumValue = std::numeric_limits<int>::max();
-        int maximumValue = std::numeric_limits<int>::min();
+        minimumStoredValue = std::numeric_limits<int>::max();
+        maximumStoredValue = std::numeric_limits<int>::min();
+        rawPixels.resize(pixelCount);
+        const double rescaleSlope = readNumericTagValue(0x0028, 0x1053, 1.0);
+        const double rescaleIntercept = readNumericTagValue(0x0028, 0x1052, 0.0);
 
         if (isSignedPixelData)
         {
             const auto* pixelData = reinterpret_cast<const int16_t*>(buffer.constData());
             for (int index = 0; index < pixelCount; ++index)
             {
-                const int value = static_cast<int>(pixelData[index]);
-                minimumValue = std::min(minimumValue, value);
-                maximumValue = std::max(maximumValue, value);
-            }
-
-            const int valueRange = std::max(1, maximumValue - minimumValue);
-            for (int y = 0; y < static_cast<int>(height); ++y)
-            {
-                uchar* scanLine = image.scanLine(y);
-                for (int x = 0; x < static_cast<int>(width); ++x)
-                {
-                    const int index = y * static_cast<int>(width) + x;
-                    const int normalizedValue = ((static_cast<int>(pixelData[index]) - minimumValue) * 255) / valueRange;
-                    scanLine[x] = static_cast<uchar>(isMonochrome1 ? 255 - normalizedValue : normalizedValue);
-                }
+                const int value = static_cast<int>(std::lround((static_cast<double>(pixelData[index]) * rescaleSlope) + rescaleIntercept));
+                rawPixels[index] = value;
+                minimumStoredValue = std::min(minimumStoredValue, value);
+                maximumStoredValue = std::max(maximumStoredValue, value);
             }
         }
         else
@@ -292,23 +359,23 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(const QString& file
             const auto* pixelData = reinterpret_cast<const uint16_t*>(buffer.constData());
             for (int index = 0; index < pixelCount; ++index)
             {
-                const int value = static_cast<int>(pixelData[index]);
-                minimumValue = std::min(minimumValue, value);
-                maximumValue = std::max(maximumValue, value);
-            }
-
-            const int valueRange = std::max(1, maximumValue - minimumValue);
-            for (int y = 0; y < static_cast<int>(height); ++y)
-            {
-                uchar* scanLine = image.scanLine(y);
-                for (int x = 0; x < static_cast<int>(width); ++x)
-                {
-                    const int index = y * static_cast<int>(width) + x;
-                    const int normalizedValue = ((static_cast<int>(pixelData[index]) - minimumValue) * 255) / valueRange;
-                    scanLine[x] = static_cast<uchar>(isMonochrome1 ? 255 - normalizedValue : normalizedValue);
-                }
+                const int value = static_cast<int>(std::lround((static_cast<double>(pixelData[index]) * rescaleSlope) + rescaleIntercept));
+                rawPixels[index] = value;
+                minimumStoredValue = std::min(minimumStoredValue, value);
+                maximumStoredValue = std::max(maximumStoredValue, value);
             }
         }
+
+        defaultWindowLevel = static_cast<int>(std::lround(readNumericTagValue(
+            0x0028,
+            0x1050,
+            (static_cast<double>(minimumStoredValue) + static_cast<double>(maximumStoredValue)) / 2.0)));
+        defaultWindowWidth = std::max(
+            1,
+            static_cast<int>(std::lround(readNumericTagValue(
+                0x0028,
+                0x1051,
+                static_cast<double>(std::max(1, maximumStoredValue - minimumStoredValue))))));
     }
     else
     {
@@ -318,15 +385,49 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(const QString& file
         return nullptr;
     }
 
-    gdcm::StringFilter stringFilter;
-    stringFilter.SetFile(reader.GetFile());
-
     auto dicomImage = std::make_unique<DicomImage>();
-    dicomImage->setPixmap(QPixmap::fromImage(image));
     dicomImage->setFilePath(filePath);
     dicomImage->setDimensions(static_cast<int>(width), static_cast<int>(height));
     dicomImage->setSopInstanceUid(readStringTag(stringFilter, 0x0008, 0x0018));
     dicomImage->setInstanceNumber(readStringTag(stringFilter, 0x0020, 0x0013));
+    const auto [pixelSpacingX, pixelSpacingY] = readPixelSpacingValues();
+    dicomImage->setPixelSpacing(pixelSpacingX, pixelSpacingY);
+
+    if (isMonochromeImage && !rawPixels.isEmpty())
+    {
+        dicomImage->setMonochrome(true);
+        dicomImage->setMonochrome1(isMonochrome1);
+        dicomImage->setRawPixels(rawPixels);
+        dicomImage->setValueRange(minimumStoredValue, maximumStoredValue);
+
+        if (samplesPerPixel == 1 && bitsAllocated <= 8)
+        {
+            defaultWindowLevel = static_cast<int>(std::lround(readNumericTagValue(
+                0x0028,
+                0x1050,
+                (static_cast<double>(minimumStoredValue) + static_cast<double>(maximumStoredValue)) / 2.0)));
+            defaultWindowWidth = std::max(
+                1,
+                static_cast<int>(std::lround(readNumericTagValue(
+                    0x0028,
+                    0x1051,
+                    static_cast<double>(std::max(1, maximumStoredValue - minimumStoredValue))))));
+        }
+
+        dicomImage->setDefaultWindow(defaultWindowLevel, defaultWindowWidth);
+        if (renderPixmap)
+        {
+            DicomRenderService renderService;
+            dicomImage->setPixmap(renderService.renderImage(*dicomImage, defaultWindowLevel, defaultWindowWidth)->pixmap());
+        }
+    }
+    else
+    {
+        if (renderPixmap)
+        {
+            dicomImage->setPixmap(QPixmap::fromImage(image));
+        }
+    }
 
     if (dicomImage->sopInstanceUid().isEmpty())
     {
@@ -375,7 +476,7 @@ FileHandling::PatientPtr GDCMFileHandling::buildHierarchy(const QString& filePat
     series.setModality(readStringTag(stringFilter, 0x0008, 0x0060));
     series.setSeriesNumber(readStringTag(stringFilter, 0x0020, 0x0011));
 
-    std::unique_ptr<DicomImage> dicomImage = loadDicomImage(filePath, reader);
+    std::unique_ptr<DicomImage> dicomImage = loadDicomImage(filePath, reader, true);
     if (dicomImage)
     {
         series.addImage(std::move(dicomImage));

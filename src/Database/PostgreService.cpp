@@ -447,7 +447,11 @@ void PostgreService::populateImages(Series& series)
     QSqlQuery query(m_connection->database());
     query.prepare(
         "SELECT sop_instance_uid, file_path, instance_number, image_width, image_height, preview_png "
-        "FROM dicom_images WHERE series_instance_uid = :series_instance_uid ORDER BY instance_number, sop_instance_uid");
+        "FROM dicom_images WHERE series_instance_uid = :series_instance_uid "
+        "ORDER BY "
+        "CASE WHEN instance_number ~ '^[0-9]+$' THEN instance_number::INTEGER END NULLS LAST, "
+        "instance_number, "
+        "sop_instance_uid");
     query.bindValue(":series_instance_uid", series.seriesInstanceUid());
 
     if (!query.exec())
