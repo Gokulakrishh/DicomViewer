@@ -1,160 +1,124 @@
+# DicomViewer
 
+`DicomViewer` is a `Qt 6` / `C++20` desktop application for loading, browsing, and viewing DICOM studies with PostgreSQL-backed hierarchy indexing.
 
-## ✨ Overview
+## Overview
 
-**DicomViewer** is a C++ medical imaging application designed with **clean architecture**, **modern C++**, and **extensibility** in mind.
+Current capabilities:
+- DICOM import with `GDCM`
+- PostgreSQL persistence for `Patient -> Study -> Series -> DicomImage`
+- cached preview images stored in the database
+- raw-slice DICOM viewing with true grayscale `WL/WW`
+- slice browsing with slider, mouse wheel, and cine playback
+- measurement tools:
+  - distance
+  - pixel probe / HU probe
+  - angle
 
-The project focuses on **separating UI from business logic**, making it easy to support:
-- new medical image formats
-- multiple rendering backends
-- PostgreSQL-backed DICOM indexing
-- future AI / LLM-assisted workflows
+### Domain
+- `Patient`
+- `Study`
+- `Series`
+- `DicomImage`
 
----
+### Loading / Persistence
+- `GDCMFileHandling`
+  - scans folders
+  - loads DICOM tags and raw pixel data
+- `PostgreService`
+  - stores and retrieves patient/study/series/image hierarchy
+  - stores preview PNG blobs for fast tree/preview reload
 
-## 🧠 Design Philosophy
+### Viewer
+- `ViewportSession`
+  - per-viewport state container
+  - current series
+  - current slice index
+  - WL / WW
+  - preset
+  - tool
+  - cine state
+- `DicomViewportController`
+  - operates on one `ViewportSession`
+  - manages current slice selection
+  - manages preload scheduling
+  - manages window/preset state
+- `DicomRenderService`
+  - converts raw grayscale slice data into a display pixmap
+  - applies true DICOM window level / width behavior
+- `MeasurementController`
+  - computes distance, probe, and angle results
+- `DicomGraphicsView`
+  - input handling
+  - scene overlays
+  - image presentation
+- `DicomMainWindow`
+  - UI composition and wiring
 
-- 🔹 **Abstract interfaces first**
-- 🔹 **UI completely decoupled from data**
-- 🔹 **Concrete implementations hidden behind abstractions**
-- 🔹 **Designed for growth, not just “working”**
+## Data Flow
 
-This is not a monolithic viewer — it’s a **foundation**.
-
----
-
-## 🗂️ Project Structure
-
+### Folder import
+```text
+Folder
+  -> GDCMFileHandling
+  -> Patient / Study / Series / DicomImage hierarchy
+  -> PostgreService
+  -> PostgreSQL tables + preview PNG cache
+  -> tree refresh
 ```
 
-DicomViewer/
-├── src/
-│   ├── Model/                 # Domain models (Patient, Study, Series, DicomImage)
-│   ├── FileHandling/          # File loaders (GDCMFileHandler, interfaces)
-│   ├── Database/              # PostgreSQL persistence services
-│   ├── DicomViewerWindow/     # Qt UI (MainWindow, .ui files)
-│   └── Main/                  # Application entry point
-├── build/                     # Build directory (ignored)
-├── CMakeLists.txt
-├── README.md
-└── .gitignore
-
-````
-
----
-
-## 🏗️ Architecture
-
-### Domain Layer
-```cpp
-Patient
-  └── Study
-        └── Series
-              └── DicomImage
-````
-
-* `MedicalImage` stays focused on image concerns
-* `DicomImage` stores only image-level data
-* patient / study / series are modeled separately to match DICOM hierarchy
-* UI depends on abstractions, not PostgreSQL details
-
----
-
-### File Handling Layer
-
-```cpp
-FileHandling   (abstract)
-   ▲
-   │
-GDCMFileHandling       (DICOM)
+### Display
+```text
+Tree selection
+  -> PostgreService::getSeries(...)
+  -> DicomViewportController
+  -> raw DICOM load if needed
+  -> DicomRenderService
+  -> DicomGraphicsView
 ```
 
-* File loaders return `std::unique_ptr<MedicalImage>`
-* Adding new formats does **not** affect UI code
+### Tools
+```text
+Mouse interaction
+  -> DicomGraphicsView
+  -> DicomMainWindow
+  -> MeasurementController
+  -> overlay drawn back in DicomGraphicsView
+```
 
----
+## Build Requirements
 
-### UI Layer
+- `CMake >= 3.21`
+- `C++20`
+- `Qt 6`
+  - `Core`
+  - `Gui`
+  - `Widgets`
+  - `Sql`
+  - `Concurrent`
+- `GDCM`
+- `OpenCV >= 4.6`
+- PostgreSQL client libraries and Qt `QPSQL` plugin for runtime DB access
 
-* Qt Widgets–based
-* Talks only to **interfaces**
-* No file-format or backend knowledge
-
----
-
-## 🔬 Current Features
-
-* ✅ DICOM loading via **GDCM**
-* ✅ PostgreSQL persistence for patient / study / series / image hierarchy
-* ✅ Qt Widgets UI
-* ✅ Clean separation of concerns
-* ✅ CMake-based cross-platform build
-* ✅ Extensible image and file-handler architecture
-
----
-
-## 🚀 Planned Features
-
-* 🧩 Additional medical formats (NIfTI, NRRD)
-* 🧊 3D volume rendering using VTK
-* 📊 Metadata exploration & filtering
-* 🤖 Local LLM integration (Ollama) for:
-
-  * Image summaries
-  * Metadata interpretation
-  * Workflow assistance
-
----
-
-## 🛠️ Build Requirements
-
-* **C++20**
-* **CMake ≥ 3.21**
-* **Qt 6** (Core, Gui, Widgets, Sql)
-* **GDCM**
-* **OpenCV ≥ 4.6**
-* **PostgreSQL** with Qt `QPSQL` driver
-
----
-
-## 🧪 Build Instructions
+## Local Build
 
 ```bash
-git clone https://github.com/Gokulakrishh/DicomViewer.git
-cd DicomViewer
-
-mkdir build
-cd build
-
-cmake ..
-cmake --build .
-./DicomViewer
+cmake -S . -B build
+cmake --build build -j4
 ```
 
-If Qt 6 is installed in a custom location, configure CMake with `CMAKE_PREFIX_PATH`, for example:
+If Qt is in a custom location:
 
 ```bash
-cmake -S . -B build -DCMAKE_PREFIX_PATH=/home/dust/Qt/6.5.3/gcc_64
-cmake --build build
+cmake -S . -B build -DCMAKE_PREFIX_PATH=/path/to/Qt/6.x.x
+cmake --build build -j4
 ```
 
-## 🗄️ PostgreSQL Configuration
+## Runtime Configuration
 
-The application stores imported DICOM files in a normalized hierarchy:
+Database settings are runtime-only and are read from `config.ini`.
 
-* `patients`
-* `studies`
-* `series`
-* `dicom_images`
-
-PostgreSQL settings are read at runtime through `QSettings` from `config.ini`.
-
-When running from `build-qt6`, the app looks for:
-
-* `build-qt6/config.ini`
-* then `../config.ini` relative to the executable, which resolves to the repo-root [`config.ini`](/home/dust/Documents/DicomViewer/config.ini)
-
-Fill in the database section before launching:
+Example:
 
 ```ini
 [database]
@@ -165,30 +129,30 @@ userName=postgres
 password=your_password
 ```
 
-When an image is opened, the app:
+The app stores:
+- hierarchy metadata in PostgreSQL
+- preview PNG blobs in `dicom_images`
+- original DICOM file path for raw reloading
 
-* loads the pixel data for viewing
-* parses the DICOM hierarchy as `Patient -> Study -> Series -> DicomImage`
-* upserts the hierarchy into PostgreSQL
-* stores a PNG preview in `dicom_images` for quick reload
+The raw DICOM file remains the source of truth for full-fidelity rendering.
 
----
+## CI
 
-## 🎯 Motivation
+GitHub Actions CI is defined in:
+- `.github/workflows/ci.yml`
 
-This project is built as a hobby project, focusing on:
+It currently:
+- installs Linux build dependencies
+- configures with CMake + Ninja
+- builds the project
 
-* modern C++ practices
-* clean, testable architecture
-* medical imaging workflows
-* long-term extensibility toward AI-assisted tools
+## Roadmap
 
----
+Planned expansion areas:
+- MPR
+- 3D volume rendering
+- richer ROI tools
+- persisted annotations / measurements
+- multi-viewport workflows
 
-## 📄 License
 
-MIT License
-
-```
-
----
