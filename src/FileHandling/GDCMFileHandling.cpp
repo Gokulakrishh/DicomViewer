@@ -13,6 +13,7 @@
 #include <QVector>
 #include <QtGlobal>
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <limits>
@@ -288,6 +289,44 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(
 
         return QPair<double, double>(columnSpacing, rowSpacing);
     };
+    const auto readVector3Tag = [this, &stringFilter](uint16_t group, uint16_t element) {
+        std::array<double, 3> values{0.0, 0.0, 0.0};
+        const QString tagValue = readStringTag(stringFilter, group, element);
+        const QStringList components = tagValue.split('\\', Qt::SkipEmptyParts);
+        if (components.size() < 3)
+        {
+            return std::pair<bool, std::array<double, 3>>(false, values);
+        }
+
+        bool allValid = true;
+        for (int index = 0; index < 3; ++index)
+        {
+            bool ok = false;
+            values[static_cast<std::size_t>(index)] = components.at(index).trimmed().toDouble(&ok);
+            allValid = allValid && ok;
+        }
+
+        return std::pair<bool, std::array<double, 3>>(allValid, values);
+    };
+    const auto readVector6Tag = [this, &stringFilter](uint16_t group, uint16_t element) {
+        std::array<double, 6> values{1.0, 0.0, 0.0, 0.0, 1.0, 0.0};
+        const QString tagValue = readStringTag(stringFilter, group, element);
+        const QStringList components = tagValue.split('\\', Qt::SkipEmptyParts);
+        if (components.size() < 6)
+        {
+            return std::pair<bool, std::array<double, 6>>(false, values);
+        }
+
+        bool allValid = true;
+        for (int index = 0; index < 6; ++index)
+        {
+            bool ok = false;
+            values[static_cast<std::size_t>(index)] = components.at(index).trimmed().toDouble(&ok);
+            allValid = allValid && ok;
+        }
+
+        return std::pair<bool, std::array<double, 6>>(allValid, values);
+    };
 
     QImage image;
     QVector<int> rawPixels;
@@ -392,6 +431,18 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(
     dicomImage->setInstanceNumber(readStringTag(stringFilter, 0x0020, 0x0013));
     const auto [pixelSpacingX, pixelSpacingY] = readPixelSpacingValues();
     dicomImage->setPixelSpacing(pixelSpacingX, pixelSpacingY);
+    const auto [hasImagePositionPatient, imagePositionPatient] = readVector3Tag(0x0020, 0x0032);
+    if (hasImagePositionPatient)
+    {
+        dicomImage->setImagePositionPatient(imagePositionPatient);
+    }
+    const auto [hasImageOrientationPatient, imageOrientationPatient] = readVector6Tag(0x0020, 0x0037);
+    if (hasImageOrientationPatient)
+    {
+        dicomImage->setImageOrientationPatient(imageOrientationPatient);
+    }
+    dicomImage->setSliceThickness(readNumericTagValue(0x0018, 0x0050, 0.0));
+    dicomImage->setSpacingBetweenSlices(readNumericTagValue(0x0018, 0x0088, 0.0));
 
     if (isMonochromeImage && !rawPixels.isEmpty())
     {
@@ -418,7 +469,12 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(
         if (renderPixmap)
         {
             DicomRenderService renderService;
-            dicomImage->setPixmap(renderService.renderImage(*dicomImage, defaultWindowLevel, defaultWindowWidth)->pixmap());
+            dicomImage->setPixmap(
+                renderService
+                    .renderImage(
+                        *dicomImage,
+                        DicomRenderService::RenderSettings{defaultWindowLevel, defaultWindowWidth})
+                    ->pixmap());
         }
     }
     else

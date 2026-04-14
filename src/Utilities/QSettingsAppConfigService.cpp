@@ -1,16 +1,16 @@
-#include "Config/QSettingsDatabaseConfigService.h"
+#include "Utilities/QSettingsAppConfigService.h"
 
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
 #include <QSettings>
 
-QSettingsDatabaseConfigService::QSettingsDatabaseConfigService()
+QSettingsAppConfigService::QSettingsAppConfigService()
     : m_configFilePath(resolveConfigFilePath())
 {
 }
 
-DatabaseSettings QSettingsDatabaseConfigService::loadDatabaseSettings() const
+DatabaseSettings QSettingsAppConfigService::loadDatabaseSettings() const
 {
     DatabaseSettings databaseSettings;
     QSettings settings(m_configFilePath, QSettings::IniFormat);
@@ -26,12 +26,29 @@ DatabaseSettings QSettingsDatabaseConfigService::loadDatabaseSettings() const
     return databaseSettings;
 }
 
-QString QSettingsDatabaseConfigService::configFilePath() const
+VolumeValidationSettings QSettingsAppConfigService::loadVolumeValidationSettings() const
+{
+    VolumeValidationSettings validationSettings;
+    QSettings settings(m_configFilePath, QSettings::IniFormat);
+
+    settings.beginGroup("volumeValidation");
+    validationSettings.orientationAlignmentTolerance =
+        settings.value("orientationAlignmentTolerance", validationSettings.orientationAlignmentTolerance).toDouble();
+    validationSettings.spacingTolerance =
+        settings.value("spacingTolerance", validationSettings.spacingTolerance).toDouble();
+    validationSettings.validateUniformSliceSpacing =
+        settings.value("validateUniformSliceSpacing", validationSettings.validateUniformSliceSpacing).toBool();
+    settings.endGroup();
+
+    return validationSettings;
+}
+
+QString QSettingsAppConfigService::configFilePath() const
 {
     return m_configFilePath;
 }
 
-QString QSettingsDatabaseConfigService::resolveConfigFilePath() const
+QString QSettingsAppConfigService::resolveConfigFilePath() const
 {
     const QString applicationDirPath = QCoreApplication::applicationDirPath();
     const QString localConfigPath = QDir(applicationDirPath).filePath("config.ini");

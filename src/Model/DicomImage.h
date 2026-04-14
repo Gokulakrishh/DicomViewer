@@ -2,8 +2,7 @@
 
 #include "MedicalImage.h"
 
-#include <QImage>
-#include <QPointF>
+#include <array>
 #include <QVector>
 
 class DicomImage : public MedicalImage
@@ -11,70 +10,47 @@ class DicomImage : public MedicalImage
 public:
     DicomImage() = default;
 
-    const QPixmap& pixmap() const override { return m_pixmap; }
-    bool isValid() const override { return !m_pixmap.isNull() && m_width > 0 && m_height > 0; }
+    const QPixmap& pixmap() const override;
+    bool isValid() const override;
 
-    const QString& filePath() const { return m_filePath; }
-    const QString& sopInstanceUid() const { return m_sopInstanceUid; }
-    const QString& instanceNumber() const { return m_instanceNumber; }
-    int width() const { return m_width; }
-    int height() const { return m_height; }
-    bool hasRawPixels() const { return !m_rawPixels.isEmpty() && m_width > 0 && m_height > 0; }
-    bool isMonochrome() const { return m_isMonochrome; }
-    bool isMonochrome1() const { return m_isMonochrome1; }
-    int minimumStoredValue() const { return m_minimumStoredValue; }
-    int maximumStoredValue() const { return m_maximumStoredValue; }
-    int defaultWindowLevel() const { return m_defaultWindowLevel; }
-    int defaultWindowWidth() const { return m_defaultWindowWidth; }
-    bool hasPixelSpacing() const { return m_pixelSpacingX > 0.0 && m_pixelSpacingY > 0.0; }
-    double pixelSpacingX() const { return m_pixelSpacingX; }
-    double pixelSpacingY() const { return m_pixelSpacingY; }
-    int rawPixelValueAt(int x, int y) const
-    {
-        if (!hasRawPixels() || x < 0 || y < 0 || x >= m_width || y >= m_height)
-        {
-            return 0;
-        }
+    const QString& filePath() const;
+    const QString& sopInstanceUid() const;
+    const QString& instanceNumber() const;
+    int width() const;
+    int height() const;
+    bool hasRawPixels() const;
+    bool isMonochrome() const;
+    bool isMonochrome1() const;
+    int minimumStoredValue() const;
+    int maximumStoredValue() const;
+    int defaultWindowLevel() const;
+    int defaultWindowWidth() const;
+    bool hasPixelSpacing() const;
+    double pixelSpacingX() const;
+    double pixelSpacingY() const;
+    bool hasImagePositionPatient() const;
+    bool hasImageOrientationPatient() const;
+    const std::array<double, 3>& imagePositionPatient() const;
+    const std::array<double, 6>& imageOrientationPatient() const;
+    double sliceThickness() const;
+    double spacingBetweenSlices() const;
+    int rawPixelValueAt(int x, int y) const;
 
-        return m_rawPixels[(y * m_width) + x];
-    }
-
-    void setPixmap(const QPixmap& pixmap) { m_pixmap = pixmap; }
-    void setFilePath(const QString& filePath) { m_filePath = filePath; }
-    void setSopInstanceUid(const QString& sopInstanceUid) { m_sopInstanceUid = sopInstanceUid; }
-    void setInstanceNumber(const QString& instanceNumber) { m_instanceNumber = instanceNumber; }
-    void setDimensions(int width, int height)
-    {
-        m_width = width;
-        m_height = height;
-    }
-    void setRawPixels(const QVector<int>& rawPixels)
-    {
-        m_rawPixels = rawPixels;
-    }
-    void setMonochrome(bool isMonochrome)
-    {
-        m_isMonochrome = isMonochrome;
-    }
-    void setMonochrome1(bool isMonochrome1)
-    {
-        m_isMonochrome1 = isMonochrome1;
-    }
-    void setValueRange(int minimumStoredValue, int maximumStoredValue)
-    {
-        m_minimumStoredValue = minimumStoredValue;
-        m_maximumStoredValue = maximumStoredValue;
-    }
-    void setDefaultWindow(int windowLevel, int windowWidth)
-    {
-        m_defaultWindowLevel = windowLevel;
-        m_defaultWindowWidth = windowWidth;
-    }
-    void setPixelSpacing(double pixelSpacingX, double pixelSpacingY)
-    {
-        m_pixelSpacingX = pixelSpacingX;
-        m_pixelSpacingY = pixelSpacingY;
-    }
+    void setPixmap(const QPixmap& pixmap);
+    void setFilePath(const QString& filePath);
+    void setSopInstanceUid(const QString& sopInstanceUid);
+    void setInstanceNumber(const QString& instanceNumber);
+    void setDimensions(int width, int height);
+    void setRawPixels(const QVector<int>& rawPixels);
+    void setMonochrome(bool isMonochrome);
+    void setMonochrome1(bool isMonochrome1);
+    void setValueRange(int minimumStoredValue, int maximumStoredValue);
+    void setDefaultWindow(int windowLevel, int windowWidth);
+    void setPixelSpacing(double pixelSpacingX, double pixelSpacingY);
+    void setImagePositionPatient(const std::array<double, 3>& imagePositionPatient);
+    void setImageOrientationPatient(const std::array<double, 6>& imageOrientationPatient);
+    void setSliceThickness(double sliceThickness);
+    void setSpacingBetweenSlices(double spacingBetweenSlices);
 private:
     QPixmap m_pixmap;
     QString m_filePath;
@@ -91,4 +67,10 @@ private:
     int m_defaultWindowWidth{255};
     double m_pixelSpacingX{0.0};
     double m_pixelSpacingY{0.0};
+    std::array<double, 3> m_imagePositionPatient{0.0, 0.0, 0.0};
+    std::array<double, 6> m_imageOrientationPatient{1.0, 0.0, 0.0, 0.0, 1.0, 0.0};
+    bool m_hasImagePositionPatient{false};
+    bool m_hasImageOrientationPatient{false};
+    double m_sliceThickness{0.0};
+    double m_spacingBetweenSlices{0.0};
 };

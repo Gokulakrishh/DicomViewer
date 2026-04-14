@@ -1,5 +1,6 @@
 #include "DicomMainWindow.h"
 
+#include <QAction>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QDate>
@@ -25,11 +26,14 @@
 #include <algorithm>
 #include <cmath>
 
-#include "Config/QSettingsDatabaseConfigService.h"
+#include "Utilities/IAppConfigService.h"
+#include "Utilities/LoadingDialog.h"
+#include "Utilities/IWarningDialogService.h"
 #include "Database/PostgreService.h"
 #include "FileHandling/GDCMFileHandling.h"
 #include "Model/MedicalImage.h"
-#include "UI/WarningDialogService.h"
+#include "Services/VolumeBuilder.h"
+#include "Services/WindowingAnalysisService.h"
 
 constexpr int kFilePathRole = Qt::UserRole + 1;
 constexpr int kSeriesInstanceUidRole = Qt::UserRole + 2;
@@ -40,10 +44,21 @@ constexpr int kModalityRole = Qt::UserRole + 6;
 constexpr int kStudyDateRole = Qt::UserRole + 7;
 constexpr int kSearchTextRole = Qt::UserRole + 8;
 
-DicomMainWindow::DicomMainWindow(QWidget* parent)
+DicomMainWindow::DicomMainWindow(
+    std::unique_ptr<IAppConfigService> appConfigService,
+    std::unique_ptr<IAdvancedViewerLauncher> advancedViewerLauncher,
+    std::unique_ptr<IWarningDialogService> warningDialogService,
+    QWidget* parent)
     : QMainWindow(parent),
-      m_ui(new Ui::DicomMainWindow)
+      m_ui(new Ui::DicomMainWindow),
+      m_appConfigService(std::move(appConfigService)),
+      m_advancedViewerLauncher(std::move(advancedViewerLauncher)),
+      m_warningDialogService(std::move(warningDialogService))
 {
+    if (m_warningDialogService)
+    {
+        m_warningDialogService->setParentWidget(this);
+    }
     m_ui->setupUi(this);
     setUiComponents();
     resize(1200, 800);
@@ -165,15 +180,19 @@ void DicomMainWindow::setUiComponents()
     m_cineTimer->setInterval(100);
 
     m_gdcmHandler = std::make_unique<GDCMFileHandling>();
-    m_viewportController = std::make_unique<DicomViewportController>(m_gdcmHandler.get(), &m_renderService, this);
-    m_warningDialogService = std::make_unique<WarningDialogService>(this);
-    QSettingsDatabaseConfigService databaseConfigService;
-    m_databaseService = std::make_unique<PostgreService>(databaseConfigService.loadDatabaseSettings());
+    m_volumeBuilder = std::make_unique<VolumeBuilder>(m_appConfigService->loadVolumeValidationSettings());
+    m_windowingAnalysisService = std::make_unique<WindowingAnalysisService>();
+    m_viewportController = std::make_unique<DicomViewportController>(
+        m_gdcmHandler.get(),
+        &m_renderService,
+        m_windowingAnalysisService.get(),
+        this);
+    m_databaseService = std::make_unique<PostgreService>(m_appConfigService->loadDatabaseSettings());
 
     if (!m_databaseService->initialize())
     {
         const QString warningMessage =
-            m_databaseService->lastErrorText() + " Config file: " + databaseConfigService.configFilePath();
+            m_databaseService->lastErrorText() + " Config file: " + m_appConfigService->configFilePath();
         statusBar()->showMessage(warningMessage, 10000);
         m_warningDialogService->showWarning("Database Configuration", warningMessage);
     }
@@ -190,8 +209,12 @@ void DicomMainWindow::setupMenuBar()
     m_openFolderAction = new QAction("Open Folder", this);
     m_ui->fileMenu->addAction(m_openFolderAction);
 
+    m_openMprAction = new QAction("Open MPR Viewer", this);
+    m_ui->viewMenu->addAction(m_openMprAction);
+
     connect(m_openFileAction, &QAction::triggered, this, &DicomMainWindow::openImage);
     connect(m_openFolderAction, &QAction::triggered, this, &DicomMainWindow::openFolder);
+    connect(m_openMprAction, &QAction::triggered, this, &DicomMainWindow::openMprViewer);
 }
 
 void DicomMainWindow::setupConnections()
@@ -244,9 +267,23 @@ void DicomMainWindow::setupConnections()
         connect(m_presetComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &DicomMainWindow::onPresetChanged);
     }
 
+    if (m_autoWindowPresetComboBox)
+    {
+        connect(
+            m_autoWindowPresetComboBox,
+            QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this,
+            &DicomMainWindow::onAutoWindowPresetChanged);
+    }
+
     if (m_toolComboBox)
     {
         connect(m_toolComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &DicomMainWindow::onToolChanged);
+    }
+
+    if (m_openMprButton)
+    {
+        connect(m_openMprButton, &QPushButton::clicked, this, &DicomMainWindow::openMprViewer);
     }
 }
 
@@ -630,6 +667,84 @@ void DicomMainWindow::loadAndDisplayImage(const QString& filePath)
     statusBar()->showMessage("Loaded: " + QFileInfo(filePath).fileName(), 4000);
 }
 
+void DicomMainWindow::openMprViewer()
+{
+    if (!m_viewportController || !m_volumeBuilder || !m_advancedViewerLauncher)
+    {
+        return;
+    }
+
+    const auto currentSeries = m_viewportController->currentSeries();
+    if (!currentSeries || currentSeries->images().size() < 2)
+    {
+        m_warningDialogService->showWarning("MPR Viewer", "Select a multi-slice series before opening MPR.");
+        return;
+    }
+
+    LoadingDialog loadingDialog(this);
+    loadingDialog.show("Loading MPR", "Preparing MPR viewer...");
+
+    for (auto& image : currentSeries->images())
+    {
+        if (!image)
+        {
+            continue;
+        }
+
+        if (!m_viewportController->ensureImageLoaded(*image))
+        {
+            loadingDialog.close();
+            m_warningDialogService->showWarning(
+                "MPR Viewer",
+                "Failed to fully load all slices required for MPR.");
+            return;
+        }
+    }
+
+    std::shared_ptr<IVolumeData> volume;
+    try
+    {
+        loadingDialog.setMessage("Building MPR volume...");
+        volume = m_volumeBuilder->buildFromSeries(*currentSeries);
+    }
+    catch (const std::exception& exception)
+    {
+        loadingDialog.close();
+        m_warningDialogService->showWarning("MPR Viewer", QString("Failed to build volume: %1").arg(exception.what()));
+        return;
+    }
+
+    if (!volume)
+    {
+        loadingDialog.close();
+        m_warningDialogService->showWarning("MPR Viewer", "Unable to build a volume from the selected series.");
+        return;
+    }
+
+    QString title = "MPR Viewer";
+    if (!currentSeries->seriesDescription().trimmed().isEmpty())
+    {
+        title += " - " + currentSeries->seriesDescription().trimmed();
+    }
+    else if (!currentSeries->modality().trimmed().isEmpty())
+    {
+        title += " - " + currentSeries->modality().trimmed();
+    }
+
+    QWidget* viewer = m_advancedViewerLauncher->showMprVolume(
+        std::move(volume),
+        title,
+        m_viewportController->currentWindowLevel(),
+        m_viewportController->currentWindowWidth(),
+        this);
+    loadingDialog.close();
+    if (viewer)
+    {
+        viewer->raise();
+        viewer->activateWindow();
+    }
+}
+
 void DicomMainWindow::openImage()
 {
     QStringList supportedFormats;
@@ -839,7 +954,7 @@ void DicomMainWindow::setupImageControlsDock()
     m_presetComboBox->addItem("CT Lung");
     m_presetComboBox->addItem("CT Brain");
     m_presetComboBox->addItem("Soft Tissue");
-    dockLayout->addWidget(new QLabel("Preset", dockContentWidget));
+    dockLayout->addWidget(new QLabel("Manual Preset", dockContentWidget));
     dockLayout->addWidget(m_presetComboBox);
 
     m_toolComboBox = new QComboBox(dockContentWidget);
@@ -865,6 +980,16 @@ void DicomMainWindow::setupImageControlsDock()
     dockLayout->addWidget(new QLabel("Window Width (Contrast)", dockContentWidget));
     dockLayout->addWidget(m_windowWidthValueLabel);
     dockLayout->addWidget(m_windowWidthSlider);
+
+    m_autoWindowPresetComboBox = new QComboBox(dockContentWidget);
+    m_autoWindowPresetComboBox->addItem("None");
+    m_autoWindowPresetComboBox->addItem("General Head CT (1% / 99%)");
+    m_autoWindowPresetComboBox->addItem("Brain Focused (5% / 95%)");
+    m_autoWindowPresetComboBox->addItem("Bone Heavy (2% / 98%)");
+    dockLayout->addWidget(new QLabel("Auto Window Analysis", dockContentWidget));
+    dockLayout->addWidget(m_autoWindowPresetComboBox);
+    m_openMprButton = new QPushButton("Open MPR", dockContentWidget);
+    dockLayout->addWidget(m_openMprButton);
     dockLayout->addStretch();
 
     m_imageControlsDock->setWidget(dockContentWidget);
@@ -914,6 +1039,12 @@ void DicomMainWindow::updateImageControlsState(bool resetWindowState)
         m_presetComboBox->blockSignals(true);
         m_presetComboBox->setCurrentIndex(state.presetIndex);
         m_presetComboBox->blockSignals(false);
+    }
+    if (m_autoWindowPresetComboBox)
+    {
+        m_autoWindowPresetComboBox->blockSignals(true);
+        m_autoWindowPresetComboBox->setCurrentIndex(state.autoWindowPresetIndex);
+        m_autoWindowPresetComboBox->blockSignals(false);
     }
 }
 
@@ -974,6 +1105,11 @@ void DicomMainWindow::onWindowLevelChanged(int value)
         m_viewportController->resetPreset();
         m_presetComboBox->setCurrentIndex(0);
     }
+    if (m_autoWindowPresetComboBox && m_autoWindowPresetComboBox->currentIndex() != 0)
+    {
+        m_viewportController->resetAutoWindowPreset();
+        m_autoWindowPresetComboBox->setCurrentIndex(0);
+    }
     applyImageAdjustments();
 }
 
@@ -984,6 +1120,11 @@ void DicomMainWindow::onWindowWidthChanged(int value)
     {
         m_viewportController->resetPreset();
         m_presetComboBox->setCurrentIndex(0);
+    }
+    if (m_autoWindowPresetComboBox && m_autoWindowPresetComboBox->currentIndex() != 0)
+    {
+        m_viewportController->resetAutoWindowPreset();
+        m_autoWindowPresetComboBox->setCurrentIndex(0);
     }
     applyImageAdjustments();
 }
@@ -1003,6 +1144,47 @@ void DicomMainWindow::onPresetChanged(int index)
     if (!m_viewportController->applyPreset(index))
     {
         return;
+    }
+
+    m_windowLevelSlider->blockSignals(true);
+    m_windowWidthSlider->blockSignals(true);
+    m_windowLevelSlider->setValue(m_viewportController->currentWindowLevel());
+    m_windowWidthSlider->setValue(m_viewportController->currentWindowWidth());
+    m_windowLevelSlider->blockSignals(false);
+    m_windowWidthSlider->blockSignals(false);
+    if (m_autoWindowPresetComboBox && m_autoWindowPresetComboBox->currentIndex() != 0)
+    {
+        m_viewportController->resetAutoWindowPreset();
+        m_autoWindowPresetComboBox->blockSignals(true);
+        m_autoWindowPresetComboBox->setCurrentIndex(0);
+        m_autoWindowPresetComboBox->blockSignals(false);
+    }
+    applyImageAdjustments();
+}
+
+void DicomMainWindow::onAutoWindowPresetChanged(int index)
+{
+    if (!m_viewportController || !m_windowLevelSlider || !m_windowWidthSlider)
+    {
+        return;
+    }
+
+    if (index == 0)
+    {
+        m_viewportController->resetAutoWindowPreset();
+        return;
+    }
+
+    if (!m_viewportController->applyAutoWindowPreset(index))
+    {
+        return;
+    }
+
+    if (m_presetComboBox)
+    {
+        m_presetComboBox->blockSignals(true);
+        m_presetComboBox->setCurrentIndex(0);
+        m_presetComboBox->blockSignals(false);
     }
 
     m_windowLevelSlider->blockSignals(true);

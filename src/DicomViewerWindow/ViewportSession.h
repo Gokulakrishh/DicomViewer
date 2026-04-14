@@ -16,6 +16,7 @@ public:
     int currentWindowLevel{0};
     int currentWindowWidth{100};
     int currentPresetIndex{0};
+    int currentAutoWindowPresetIndex{0};
     bool windowStateInitialized{false};
     int seriesGeneration{0};
     int toolIndex{0};

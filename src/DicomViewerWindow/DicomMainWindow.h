@@ -8,12 +8,14 @@
 #include <QMainWindow>
 #include <QModelIndex>
 #include <QPixmap>
+#include <QPushButton>
 #include <QSplitter>
 #include <QSlider>
 #include <QTimer>
 #include <memory>
 
 #include "DicomGraphicsView.h"
+#include "AdvancedViewer/IAdvancedViewerLauncher.h"
 #include "DicomRenderService.h"
 #include "MeasurementController.h"
 #include "DicomViewportController.h"
@@ -22,8 +24,12 @@
 class FileHandling;
 class DatabaseService;
 class DicomImage;
+class IAppConfigService;
+class IWarningDialogService;
 class Patient;
 class Series;
+class VolumeBuilder;
+class WindowingAnalysisService;
 class QStandardItem;
 class QStandardItemModel;
 class QTreeView;
@@ -36,7 +42,11 @@ class DicomMainWindow : public QMainWindow
     Q_DISABLE_COPY_MOVE(DicomMainWindow)
 
 public:
-    explicit DicomMainWindow(QWidget* parent = nullptr);
+    explicit DicomMainWindow(
+        std::unique_ptr<IAppConfigService> appConfigService,
+        std::unique_ptr<IAdvancedViewerLauncher> advancedViewerLauncher,
+        std::unique_ptr<IWarningDialogService> warningDialogService,
+        QWidget* parent = nullptr);
     ~DicomMainWindow();
 
 private:
@@ -58,6 +68,7 @@ private:
     void displayCurrentSlice();
     void loadSeries(const std::shared_ptr<Series>& series, int initialIndex = 0);
     void loadAndDisplayImage(const QString& filePath);
+    void openMprViewer();
 
 private slots:
     void openImage();
@@ -72,6 +83,7 @@ private slots:
     void onWindowLevelChanged(int value);
     void onWindowWidthChanged(int value);
     void onPresetChanged(int index);
+    void onAutoWindowPresetChanged(int index);
     void onDistanceMeasurementRequested(const QPoint& startPixel, const QPoint& endPixel);
     void onPixelProbeRequested(const QPoint& pixelPos);
     void onAngleMeasurementRequested(const QPoint& startPixel, const QPoint& vertexPixel, const QPoint& endPixel);
@@ -86,6 +98,8 @@ private:
     QLineEdit* m_searchLineEdit{nullptr};
     QComboBox* m_presetComboBox{nullptr};
     QComboBox* m_toolComboBox{nullptr};
+    QComboBox* m_autoWindowPresetComboBox{nullptr};
+    QPushButton* m_openMprButton{nullptr};
     QLabel* m_patientNameValueLabel{nullptr};
     QLabel* m_patientDobValueLabel{nullptr};
     QLabel* m_patientAgeValueLabel{nullptr};
@@ -100,11 +114,16 @@ private:
     QSlider* m_windowWidthSlider{nullptr};
     QAction* m_openFileAction{nullptr};
     QAction* m_openFolderAction{nullptr};
+    QAction* m_openMprAction{nullptr};
+    std::unique_ptr<IAppConfigService> m_appConfigService;
     std::unique_ptr<FileHandling> m_gdcmHandler;
+    std::unique_ptr<IAdvancedViewerLauncher> m_advancedViewerLauncher;
+    std::unique_ptr<VolumeBuilder> m_volumeBuilder;
+    std::unique_ptr<WindowingAnalysisService> m_windowingAnalysisService;
     DicomRenderService m_renderService;
     std::unique_ptr<DicomViewportController> m_viewportController;
     std::unique_ptr<DatabaseService> m_databaseService;
-    std::unique_ptr<WarningDialogService> m_warningDialogService;
+    std::unique_ptr<IWarningDialogService> m_warningDialogService;
     QTimer* m_cineTimer{nullptr};
     MeasurementController m_measurementController;
 };

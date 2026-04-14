@@ -2,7 +2,10 @@
 #include <QPalette>
 #include <QStyleFactory>
 
+#include "AdvancedViewer/WidgetsAdvancedViewerLauncher.h"
 #include "DicomViewerWindow/DicomMainWindow.h"
+#include "Utilities/QSettingsAppConfigService.h"
+#include "Utilities/WarningDialogService.h"
 
 int main(int argc, char* argv[])
 {
@@ -27,7 +30,10 @@ int main(int argc, char* argv[])
     darkPalette.setColor(QPalette::HighlightedText, Qt::black);
     app.setPalette(darkPalette);
 
-    DicomMainWindow dicom;
+    DicomMainWindow dicom(
+        std::make_unique<QSettingsAppConfigService>(),
+        std::make_unique<WidgetsAdvancedViewerLauncher>(),
+        std::make_unique<WarningDialogService>());
     dicom.show();
     return app.exec();
 }

@@ -12,6 +12,7 @@ class DicomImage;
 class FileHandling;
 class Series;
 class DicomRenderService;
+class WindowingAnalysisService;
 
 class DicomViewportController : public QObject
 {
@@ -28,11 +29,13 @@ public:
         int level{0};
         int width{100};
         int presetIndex{0};
+        int autoWindowPresetIndex{0};
     };
 
     explicit DicomViewportController(
         FileHandling* fileHandling,
         const DicomRenderService* renderService,
+        const WindowingAnalysisService* windowingAnalysisService,
         QObject* parent = nullptr);
     ~DicomViewportController() override;
 
@@ -61,8 +64,11 @@ public:
     int currentWindowLevel() const;
     int currentWindowWidth() const;
     int currentPresetIndex() const;
+    int currentAutoWindowPresetIndex() const;
     void resetPreset();
     bool applyPreset(int index);
+    void resetAutoWindowPreset();
+    bool applyAutoWindowPreset(int index);
     void setToolIndex(int index);
     int toolIndex() const;
     void setCinePlaying(bool playing);
@@ -78,6 +84,7 @@ private:
 private:
     FileHandling* m_fileHandling{nullptr};
     const DicomRenderService* m_renderService{nullptr};
+    const WindowingAnalysisService* m_windowingAnalysisService{nullptr};
     ViewportSession m_session;
     QSet<int> m_pendingPreloadIndices;
     QList<QFutureWatcher<std::shared_ptr<DicomImage>>*> m_preloadWatchers;

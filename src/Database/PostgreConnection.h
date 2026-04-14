@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Config/DatabaseSettings.h"
+#include "Utilities/DatabaseSettings.h"
 #include "Database/DatabaseConnection.h"
 
 #include <QSqlDatabase>

@@ -10,14 +10,17 @@
 #include "Model/DicomImage.h"
 #include "Model/MedicalImage.h"
 #include "Model/DicomParameters.h"
+#include "Services/WindowingAnalysisService.h"
 
 DicomViewportController::DicomViewportController(
     FileHandling* fileHandling,
     const DicomRenderService* renderService,
+    const WindowingAnalysisService* windowingAnalysisService,
     QObject* parent)
     : QObject(parent),
       m_fileHandling(fileHandling),
-      m_renderService(renderService)
+      m_renderService(renderService),
+      m_windowingAnalysisService(windowingAnalysisService)
 {
 }
 
@@ -86,6 +89,7 @@ void DicomViewportController::setSeries(const std::shared_ptr<Series>& series, i
     m_session.currentImageIndex = count > 0 ? std::clamp(initialIndex, 0, count - 1) : -1;
     m_session.windowStateInitialized = false;
     m_session.currentPresetIndex = 0;
+    m_session.currentAutoWindowPresetIndex = 0;
     m_session.cinePlaying = false;
 }
 
@@ -98,6 +102,7 @@ void DicomViewportController::setSingleImage(const std::shared_ptr<DicomImage>& 
     m_session.currentImageIndex = -1;
     m_session.windowStateInitialized = false;
     m_session.currentPresetIndex = 0;
+    m_session.currentAutoWindowPresetIndex = 0;
     m_session.cinePlaying = false;
 }
 
@@ -227,6 +232,7 @@ DicomViewportController::WindowControlState DicomViewportController::windowContr
             m_session.currentWindowLevel = displayedImage->defaultWindowLevel();
             m_session.currentWindowWidth = std::max(1, displayedImage->defaultWindowWidth());
             m_session.currentPresetIndex = 0;
+            m_session.currentAutoWindowPresetIndex = 0;
             m_session.windowStateInitialized = true;
         }
         else
@@ -246,6 +252,7 @@ DicomViewportController::WindowControlState DicomViewportController::windowContr
             m_session.currentWindowLevel = 0;
             m_session.currentWindowWidth = 100;
             m_session.currentPresetIndex = 0;
+            m_session.currentAutoWindowPresetIndex = 0;
             m_session.windowStateInitialized = true;
         }
     }
@@ -253,6 +260,7 @@ DicomViewportController::WindowControlState DicomViewportController::windowContr
     state.level = m_session.currentWindowLevel;
     state.width = m_session.currentWindowWidth;
     state.presetIndex = m_session.currentPresetIndex;
+    state.autoWindowPresetIndex = m_session.currentAutoWindowPresetIndex;
     return state;
 }
 
@@ -269,8 +277,9 @@ std::shared_ptr<DicomImage> DicomViewportController::renderCurrentImage() const
     {
         return m_renderService->renderImage(
             *displayedImage,
-            m_session.currentWindowLevel,
-            m_session.currentWindowWidth);
+            DicomRenderService::RenderSettings{
+                m_session.currentWindowLevel,
+                m_session.currentWindowWidth});
     }
 
     return adjustedImageModel;
@@ -299,6 +308,11 @@ int DicomViewportController::currentWindowWidth() const
 int DicomViewportController::currentPresetIndex() const
 {
     return m_session.currentPresetIndex;
+}
+
+int DicomViewportController::currentAutoWindowPresetIndex() const
+{
+    return m_session.currentAutoWindowPresetIndex;
 }
 
 void DicomViewportController::resetPreset()
@@ -347,6 +361,37 @@ bool DicomViewportController::applyPreset(int index)
     m_session.currentWindowLevel = std::clamp(presetValues.level, minimumValue, maximumValue);
     m_session.currentWindowWidth = std::clamp(presetValues.width, 1, std::max(1, maximumValue - minimumValue));
     m_session.currentPresetIndex = index;
+    m_session.currentAutoWindowPresetIndex = 0;
+    return true;
+}
+
+void DicomViewportController::resetAutoWindowPreset()
+{
+    m_session.currentAutoWindowPresetIndex = 0;
+}
+
+bool DicomViewportController::applyAutoWindowPreset(int index)
+{
+    const DicomImage* displayedImage = currentImage();
+    if (!displayedImage || !displayedImage->hasRawPixels() || !m_windowingAnalysisService)
+    {
+        return false;
+    }
+
+    const auto result = m_windowingAnalysisService->analyzePreset(
+        *displayedImage,
+        static_cast<WindowingAnalysisService::Preset>(index));
+    if (!result.valid)
+    {
+        return false;
+    }
+
+    const int minimumValue = displayedImage->minimumStoredValue();
+    const int maximumValue = displayedImage->maximumStoredValue();
+    m_session.currentWindowLevel = std::clamp(result.windowLevel, minimumValue, maximumValue);
+    m_session.currentWindowWidth = std::clamp(result.windowWidth, 1, std::max(1, maximumValue - minimumValue));
+    m_session.currentAutoWindowPresetIndex = index;
+    m_session.currentPresetIndex = 0;
     return true;
 }
 
