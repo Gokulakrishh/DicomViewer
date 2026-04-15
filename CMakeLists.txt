@@ -22,9 +22,8 @@ set(CMAKE_AUTOUIC ON)
 # ----------------------------
 # Find dependencies
 # ----------------------------
-find_package(QT NAMES Qt6 REQUIRED COMPONENTS Core Gui Widgets Sql Concurrent Network)
-find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Gui Widgets Sql Concurrent Network)
-message(STATUS "Qt major version: ${QT_VERSION_MAJOR}")
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Sql Concurrent Network)
+message(STATUS "Qt major version: 6")
 
 find_package(GDCM REQUIRED)
 message(STATUS "GDCM")
@@ -134,12 +133,12 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 # ----------------------------
 target_link_libraries(${PROJECT_NAME}
     PRIVATE
-        Qt${QT_VERSION_MAJOR}::Core
-        Qt${QT_VERSION_MAJOR}::Gui
-        Qt${QT_VERSION_MAJOR}::Widgets
-        Qt${QT_VERSION_MAJOR}::Sql
-        Qt${QT_VERSION_MAJOR}::Concurrent
-        Qt${QT_VERSION_MAJOR}::Network
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Widgets
+        Qt6::Sql
+        Qt6::Concurrent
+        Qt6::Network
         ${OpenCV_LIBS}
     	${GDCM_LIBRARIES}
         gdcmCommon
