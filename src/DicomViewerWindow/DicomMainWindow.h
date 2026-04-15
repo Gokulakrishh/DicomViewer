@@ -121,6 +121,7 @@ private slots:
     void onAngleMeasurementRequested(const QPoint& startPixel, const QPoint& vertexPixel, const QPoint& endPixel);
     void onAskAiClicked();
     void onAiRequestFinished();
+    void onClearAiConversationClicked();
 
 private:
     Ui::DicomMainWindow* m_ui{nullptr};
@@ -139,6 +140,7 @@ private:
     QComboBox* m_aiReasoningComboBox{nullptr};
     QPushButton* m_openMprButton{nullptr};
     QPushButton* m_aiAskButton{nullptr};
+    QPushButton* m_aiClearButton{nullptr};
     QCheckBox* m_aiIncludeImageCheckBox{nullptr};
     QTextEdit* m_aiChatHistoryEdit{nullptr};
     QPlainTextEdit* m_aiPromptEdit{nullptr};

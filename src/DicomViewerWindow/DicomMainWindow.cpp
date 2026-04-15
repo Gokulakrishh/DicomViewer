@@ -19,6 +19,7 @@
 #include <QLineEdit>
 #include <QMetaObject>
 #include <QPointer>
+#include <QRegularExpression>
 #include <QSet>
 #include <QSlider>
 #include <QStandardItem>
@@ -45,6 +46,100 @@
 #include "Model/MedicalImage.h"
 #include "Services/VolumeBuilder.h"
 #include "Services/WindowingAnalysisService.h"
+
+namespace
+{
+QString formatAiMessageToHtml(const QString& message)
+{
+    QString html = message.trimmed().toHtmlEscaped();
+
+    static const QRegularExpression boldPattern(R"(\*\*(.+?)\*\*)");
+    html.replace(boldPattern, "<strong>\\1</strong>");
+
+    const QStringList lines = html.split('\n');
+    QStringList formattedLines;
+    bool inBulletList = false;
+    bool inNumberedList = false;
+
+    const auto closeLists = [&formattedLines, &inBulletList, &inNumberedList]() {
+        if (inBulletList)
+        {
+            formattedLines.append("</ul>");
+            inBulletList = false;
+        }
+        if (inNumberedList)
+        {
+            formattedLines.append("</ol>");
+            inNumberedList = false;
+        }
+    };
+
+    static const QRegularExpression numberedListPattern(R"(^\d+\.\s+(.+)$)");
+
+    for (const QString& rawLine : lines)
+    {
+        const QString line = rawLine.trimmed();
+        if (line.isEmpty())
+        {
+            closeLists();
+            formattedLines.append("<br/>");
+            continue;
+        }
+
+        if (line.startsWith("### "))
+        {
+            closeLists();
+            formattedLines.append(QString("<div style='font-weight:700; margin:8px 0 4px 0;'>%1</div>").arg(line.mid(4)));
+            continue;
+        }
+
+        if (line.startsWith("## "))
+        {
+            closeLists();
+            formattedLines.append(QString("<div style='font-weight:700; font-size:14px; margin:10px 0 4px 0;'>%1</div>").arg(line.mid(3)));
+            continue;
+        }
+
+        if (line.startsWith("# "))
+        {
+            closeLists();
+            formattedLines.append(QString("<div style='font-weight:700; font-size:15px; margin:12px 0 6px 0;'>%1</div>").arg(line.mid(2)));
+            continue;
+        }
+
+        if (line.startsWith("- ") || line.startsWith("* "))
+        {
+            if (!inBulletList)
+            {
+                closeLists();
+                formattedLines.append("<ul style='margin:4px 0 8px 18px; padding:0;'>");
+                inBulletList = true;
+            }
+            formattedLines.append(QString("<li style='margin:2px 0;'>%1</li>").arg(line.mid(2)));
+            continue;
+        }
+
+        const QRegularExpressionMatch numberedMatch = numberedListPattern.match(line);
+        if (numberedMatch.hasMatch())
+        {
+            if (!inNumberedList)
+            {
+                closeLists();
+                formattedLines.append("<ol style='margin:4px 0 8px 18px; padding:0;'>");
+                inNumberedList = true;
+            }
+            formattedLines.append(QString("<li style='margin:2px 0;'>%1</li>").arg(numberedMatch.captured(1)));
+            continue;
+        }
+
+        closeLists();
+        formattedLines.append(QString("<div>%1</div>").arg(line));
+    }
+
+    closeLists();
+    return formattedLines.join(QString());
+}
+}
 
 constexpr int kFilePathRole = Qt::UserRole + 1;
 constexpr int kSeriesInstanceUidRole = Qt::UserRole + 2;
@@ -301,6 +396,11 @@ void DicomMainWindow::setupConnections()
     if (m_aiAskButton)
     {
         connect(m_aiAskButton, &QPushButton::clicked, this, &DicomMainWindow::onAskAiClicked);
+    }
+
+    if (m_aiClearButton)
+    {
+        connect(m_aiClearButton, &QPushButton::clicked, this, &DicomMainWindow::onClearAiConversationClicked);
     }
 
     if (m_aiResponseWatcher)
@@ -920,28 +1020,26 @@ void DicomMainWindow::appendAiMessage(const QString& speaker, const QString& mes
         return;
     }
 
-    const QString safeSpeaker = normalizedAiSpeakerName(speaker).toHtmlEscaped();
-    const QString safeMessage = message.trimmed().toHtmlEscaped().replace('\n', "<br/>");
+    const QString normalizedSpeaker = normalizedAiSpeakerName(speaker).trimmed();
+    const QString safeSpeaker = QString("%1:").arg(normalizedSpeaker).toHtmlEscaped();
+    const QString formattedMessage = formatAiMessageToHtml(message);
     const bool isUser = speaker.trimmed().compare("You", Qt::CaseInsensitive) == 0;
-    const QString alignment = isUser ? "left" : "right";
+    const QString alignment = isUser ? "right" : "left";
     const QString bubbleColor = isUser ? "#E7F0FF" : "#D9ECFF";
     const QString bubbleHtml =
         QString(
-            "<div style='text-align:%1; margin:8px 0;'>"
+            "<div style='text-align:%1; margin:10px 0 18px 0;'>"
             "<div style='display:inline-block; max-width:78%%; background:%2; color:#183247; "
-            "border-radius:12px; padding:8px 12px; text-align:left;'>"
-            "<div style='font-weight:600; margin-bottom:4px;'>%3</div>"
+            "border:1px solid #b8d2ea; border-radius:12px; padding:8px 12px; text-align:left;'>"
+            "<div style='font-weight:700; margin-bottom:6px;'>%3</div>"
             "<div>%4</div>"
             "</div>"
-            "</div>")
-            .arg(alignment, bubbleColor, safeSpeaker, safeMessage);
+            "</div>"
+            "<div><br/><br/></div>")
+            .arg(alignment, bubbleColor, safeSpeaker, formattedMessage);
 
     QTextCursor cursor = m_aiChatHistoryEdit->textCursor();
     cursor.movePosition(QTextCursor::End);
-    if (!m_aiChatHistoryEdit->document()->isEmpty())
-    {
-        cursor.insertHtml("<div style='height:6px;'></div>");
-    }
     cursor.insertHtml(bubbleHtml);
     m_aiChatHistoryEdit->setTextCursor(cursor);
     m_aiHistoryShowingStatusMessage = false;
@@ -1118,6 +1216,17 @@ void DicomMainWindow::onAiRequestFinished()
     {
         appendAiMessage(assistantName, QString("Request failed: %1").arg(response.errorMessage));
     }
+}
+
+void DicomMainWindow::onClearAiConversationClicked()
+{
+    if (!m_aiChatHistoryEdit)
+    {
+        return;
+    }
+
+    m_aiChatHistoryEdit->clear();
+    m_aiHistoryShowingStatusMessage = false;
 }
 
 void DicomMainWindow::openImage()
@@ -1622,6 +1731,7 @@ void DicomMainWindow::setupAiDock()
 
     m_aiAskButton = new QPushButton("Ask AI", dockContentWidget);
     m_aiAskButton->setObjectName("primaryActionButton");
+    m_aiClearButton = new QPushButton("Clear", dockContentWidget);
 
     auto* modelLayout = new QVBoxLayout();
     modelLayout->setContentsMargins(0, 0, 0, 0);
@@ -1648,7 +1758,12 @@ void DicomMainWindow::setupAiDock()
     dockLayout->addWidget(m_aiPromptEdit, 1);
     dockLayout->addLayout(modelLayout);
     dockLayout->addLayout(optionsRowLayout);
-    dockLayout->addWidget(m_aiAskButton);
+    auto* actionLayout = new QHBoxLayout();
+    actionLayout->setContentsMargins(0, 0, 0, 0);
+    actionLayout->setSpacing(8);
+    actionLayout->addWidget(m_aiClearButton);
+    actionLayout->addWidget(m_aiAskButton, 1);
+    dockLayout->addLayout(actionLayout);
 
     m_aiDock->setWidget(dockContentWidget);
     addDockWidget(Qt::RightDockWidgetArea, m_aiDock);
