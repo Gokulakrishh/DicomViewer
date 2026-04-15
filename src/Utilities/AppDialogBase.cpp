@@ -41,11 +41,6 @@ AppDialogBase::AppDialogBase(QWidget* parent)
     rootLayout->addWidget(separator);
     rootLayout->addWidget(bodyContainer);
 
-    setStyleSheet(
-        "QDialog { background: #2b2b2b; }"
-        "QLabel#appDialogBrandLabel { color: #8fb7ff; font-size: 14px; font-weight: 700; }"
-        "QLabel#appDialogTitleLabel { color: #ffffff; font-size: 18px; font-weight: 700; }"
-        "QLabel#appDialogMessageLabel { color: #d8d8d8; font-size: 13px; }");
 }
 
 void AppDialogBase::setDialogTitleText(const QString& title)

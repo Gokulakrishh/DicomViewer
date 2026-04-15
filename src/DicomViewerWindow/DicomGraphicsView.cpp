@@ -2,8 +2,32 @@
 
 #include "Model/MedicalImage.h"
 
+#include <QHBoxLayout>
+#include <QIcon>
+#include <QLabel>
 #include <QPainter>
 #include <QPen>
+#include <QSize>
+#include <QSlider>
+#include <QToolButton>
+#include <QVBoxLayout>
+#include <algorithm>
+
+namespace
+{
+struct ToolDescriptor
+{
+    DicomGraphicsView::ToolMode mode;
+    const char* iconPath;
+    const char* toolTip;
+};
+
+const ToolDescriptor kToolDescriptors[] = {
+    {DicomGraphicsView::ToolMode::Pan, ":/icons/tool_pan.svg", "Pan"},
+    {DicomGraphicsView::ToolMode::Distance, ":/icons/tool_distance.svg", "Distance measurement"},
+    {DicomGraphicsView::ToolMode::PixelProbe, ":/icons/tool_probe.svg", "Pixel probe"},
+    {DicomGraphicsView::ToolMode::Angle, ":/icons/tool_angle.svg", "Angle measurement"}};
+}
 
 DicomGraphicsView::DicomGraphicsView(QWidget* parent)
     : QGraphicsView(parent)
@@ -38,6 +62,8 @@ DicomGraphicsView::DicomGraphicsView(QWidget* parent)
     setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
     setCacheMode(QGraphicsView::CacheNone);
     setViewportUpdateMode(QGraphicsView::FullViewportUpdate);
+
+    buildOverlayControls();
 }
 
 void DicomGraphicsView::setImage(std::shared_ptr<MedicalImage> image)
@@ -53,6 +79,8 @@ void DicomGraphicsView::clearImage()
     m_pixmapItem->setPixmap(QPixmap());
     resetTransform();
     m_zoomFactor = 1.0;
+    m_fitToViewPending = true;
+    setSliceNavigationState(0, 0);
 }
 
 void DicomGraphicsView::setToolMode(ToolMode toolMode)
@@ -68,6 +96,57 @@ void DicomGraphicsView::setToolMode(ToolMode toolMode)
     {
         setDragMode(QGraphicsView::NoDrag);
     }
+    updateToolOverlaySelection();
+}
+
+void DicomGraphicsView::setSliceNavigationState(int currentIndex, int totalCount)
+{
+    m_totalSliceCount = std::max(0, totalCount);
+    m_currentSliceIndex = m_totalSliceCount > 0 ? std::clamp(currentIndex, 0, m_totalSliceCount - 1) : 0;
+
+    if (m_sliceSlider)
+    {
+        m_sliceSlider->blockSignals(true);
+        m_sliceSlider->setEnabled(m_totalSliceCount > 1);
+        m_sliceSlider->setMinimum(0);
+        m_sliceSlider->setMaximum(std::max(0, m_totalSliceCount - 1));
+        m_sliceSlider->setValue(m_currentSliceIndex);
+        m_sliceSlider->blockSignals(false);
+    }
+
+    updateSliceNavigationLabel();
+    if (m_cineOverlayWidget)
+    {
+        m_cineOverlayWidget->setVisible(m_totalSliceCount > 0);
+    }
+}
+
+void DicomGraphicsView::setCineAvailable(bool available)
+{
+    if (m_cinePlayButton)
+    {
+        m_cinePlayButton->setEnabled(available);
+        if (!available)
+        {
+            m_cinePlayButton->blockSignals(true);
+            m_cinePlayButton->setChecked(false);
+            m_cinePlayButton->setIcon(QIcon(":/icons/cine_play.svg"));
+            m_cinePlayButton->blockSignals(false);
+        }
+    }
+}
+
+void DicomGraphicsView::setCinePlaying(bool playing)
+{
+    if (!m_cinePlayButton)
+    {
+        return;
+    }
+
+    m_cinePlayButton->blockSignals(true);
+    m_cinePlayButton->setChecked(playing);
+    m_cinePlayButton->setIcon(QIcon(playing ? ":/icons/cine_pause.svg" : ":/icons/cine_play.svg"));
+    m_cinePlayButton->blockSignals(false);
 }
 
 void DicomGraphicsView::showDistanceMeasurement(const QPointF& startScenePos, const QPointF& endScenePos, const QString& label)
@@ -220,14 +299,14 @@ void DicomGraphicsView::wheelEvent(QWheelEvent* event)
 void DicomGraphicsView::resizeEvent(QResizeEvent* event)
 {
     QGraphicsView::resizeEvent(event);
+    updateOverlayGeometry();
 
     if (!m_image || !m_image->isValid() || m_scene->sceneRect().isEmpty())
     {
         return;
     }
 
-    fitInView(m_scene->sceneRect(), Qt::KeepAspectRatio);
-    m_zoomFactor = 1.0;
+    applyFitToView();
 }
 
 bool DicomGraphicsView::mapMouseToImage(const QPoint& viewPos, QPoint& pixelPos, QPointF& scenePos) const
@@ -260,12 +339,167 @@ void DicomGraphicsView::updatePixmap()
     }
 
     const QPixmap pixmap = m_image->pixmap();
+    const QRectF previousSceneRect = m_scene->sceneRect();
     m_pixmapItem->setPixmap(QPixmap());
     m_pixmapItem->setPixmap(pixmap);
     m_scene->setSceneRect(pixmap.rect());
     clearMeasurementOverlays();
-    fitInView(m_scene->sceneRect(), Qt::KeepAspectRatio);
-    m_zoomFactor = 1.0;
+    if (m_fitToViewPending || previousSceneRect.size() != m_scene->sceneRect().size())
+    {
+        applyFitToView();
+    }
     m_scene->update();
     viewport()->update();
+    updateOverlayGeometry();
+}
+
+void DicomGraphicsView::applyFitToView()
+{
+    if (m_scene->sceneRect().isEmpty())
+    {
+        return;
+    }
+
+    fitInView(m_scene->sceneRect(), Qt::KeepAspectRatio);
+    m_zoomFactor = 1.0;
+    m_fitToViewPending = false;
+}
+
+void DicomGraphicsView::buildOverlayControls()
+{
+    m_toolOverlayWidget = new QWidget(viewport());
+    m_toolOverlayWidget->setObjectName("viewerToolOverlay");
+    m_toolOverlayWidget->setAttribute(Qt::WA_StyledBackground, true);
+
+    auto* toolRootLayout = new QVBoxLayout(m_toolOverlayWidget);
+    toolRootLayout->setContentsMargins(10, 8, 10, 8);
+    toolRootLayout->setSpacing(6);
+
+    auto* toolTitleLabel = new QLabel("Tools", m_toolOverlayWidget);
+    toolTitleLabel->setObjectName("viewerOverlayTitleLabel");
+    toolRootLayout->addWidget(toolTitleLabel);
+
+    auto* toolLayout = new QHBoxLayout();
+    toolLayout->setContentsMargins(0, 0, 0, 0);
+    toolLayout->setSpacing(6);
+
+    for (const auto& descriptor : kToolDescriptors)
+    {
+        auto* button = new QToolButton(m_toolOverlayWidget);
+        button->setCheckable(true);
+        button->setIcon(QIcon(QString::fromUtf8(descriptor.iconPath)));
+        button->setIconSize(QSize(18, 18));
+        button->setToolTip(QString::fromUtf8(descriptor.toolTip));
+        button->setStatusTip(QString::fromUtf8(descriptor.toolTip));
+        button->setProperty("toolMode", static_cast<int>(descriptor.mode));
+        button->setObjectName("viewerToolButton");
+        button->setAutoRaise(false);
+        button->setMinimumSize(34, 34);
+        connect(button, &QToolButton::clicked, this, [this, descriptor]() {
+            setToolMode(descriptor.mode);
+            emit toolModeSelected(descriptor.mode);
+        });
+        toolLayout->addWidget(button);
+        m_toolButtons.append(button);
+    }
+    toolRootLayout->addLayout(toolLayout);
+
+    m_cineOverlayWidget = new QWidget(viewport());
+    m_cineOverlayWidget->setObjectName("viewerCineOverlay");
+    m_cineOverlayWidget->setAttribute(Qt::WA_StyledBackground, true);
+
+    auto* cineRootLayout = new QVBoxLayout(m_cineOverlayWidget);
+    cineRootLayout->setContentsMargins(10, 8, 10, 8);
+    cineRootLayout->setSpacing(6);
+
+    auto* cineTitleLabel = new QLabel("Slices", m_cineOverlayWidget);
+    cineTitleLabel->setObjectName("viewerOverlayTitleLabel");
+    cineRootLayout->addWidget(cineTitleLabel);
+
+    auto* cineLayout = new QHBoxLayout();
+    cineLayout->setContentsMargins(0, 0, 0, 0);
+    cineLayout->setSpacing(8);
+
+    m_cinePlayButton = new QToolButton(m_cineOverlayWidget);
+    m_cinePlayButton->setCheckable(true);
+    m_cinePlayButton->setIcon(QIcon(":/icons/cine_play.svg"));
+    m_cinePlayButton->setIconSize(QSize(18, 18));
+    m_cinePlayButton->setObjectName("viewerCinePlayButton");
+    m_cinePlayButton->setMinimumSize(34, 30);
+    m_cinePlayButton->setToolTip("Play / Pause");
+    m_cinePlayButton->setStatusTip("Play / Pause");
+    connect(m_cinePlayButton, &QToolButton::toggled, this, [this](bool checked) {
+        if (m_cinePlayButton)
+        {
+            m_cinePlayButton->setIcon(QIcon(checked ? ":/icons/cine_pause.svg" : ":/icons/cine_play.svg"));
+        }
+        emit cinePlaybackToggled(checked);
+    });
+
+    m_sliceSlider = new QSlider(Qt::Horizontal, m_cineOverlayWidget);
+    m_sliceSlider->setMinimum(0);
+    m_sliceSlider->setMaximum(0);
+    m_sliceSlider->setToolTip("Slice navigation");
+    m_sliceSlider->setStatusTip("Slice navigation");
+    connect(m_sliceSlider, &QSlider::valueChanged, this, &DicomGraphicsView::sliceIndexSelected);
+
+    m_sliceLabel = new QLabel("0 / 0", m_cineOverlayWidget);
+    m_sliceLabel->setObjectName("viewerSliceLabel");
+
+    cineLayout->addWidget(m_cinePlayButton);
+    cineLayout->addWidget(m_sliceSlider, 1);
+    cineLayout->addWidget(m_sliceLabel);
+    cineRootLayout->addLayout(cineLayout);
+
+    updateToolOverlaySelection();
+    updateSliceNavigationLabel();
+    updateOverlayGeometry();
+}
+
+void DicomGraphicsView::updateOverlayGeometry()
+{
+    const QRect viewRect = viewport()->rect();
+    if (m_toolOverlayWidget)
+    {
+        const QSize toolSize = m_toolOverlayWidget->sizeHint();
+        m_toolOverlayWidget->resize(toolSize);
+        m_toolOverlayWidget->move(16, 16);
+        m_toolOverlayWidget->raise();
+    }
+
+    if (m_cineOverlayWidget)
+    {
+        const int cineWidth = std::max(320, viewRect.width() - 32);
+        const QSize cineHint = m_cineOverlayWidget->sizeHint();
+        m_cineOverlayWidget->resize(cineWidth, cineHint.height());
+        m_cineOverlayWidget->move(16, viewRect.height() - cineHint.height() - 16);
+        m_cineOverlayWidget->raise();
+    }
+}
+
+void DicomGraphicsView::updateToolOverlaySelection()
+{
+    for (auto* button : m_toolButtons)
+    {
+        if (!button)
+        {
+            continue;
+        }
+
+        const auto toolMode = static_cast<ToolMode>(button->property("toolMode").toInt());
+        button->blockSignals(true);
+        button->setChecked(toolMode == m_toolMode);
+        button->blockSignals(false);
+    }
+}
+
+void DicomGraphicsView::updateSliceNavigationLabel()
+{
+    if (!m_sliceLabel)
+    {
+        return;
+    }
+
+    const int currentDisplayIndex = m_totalSliceCount > 0 ? m_currentSliceIndex + 1 : 0;
+    m_sliceLabel->setText(QString("%1 / %2").arg(currentDisplayIndex).arg(m_totalSliceCount));
 }

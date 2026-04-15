@@ -14,11 +14,17 @@ public:
     const QString& seriesDescription() const { return m_seriesDescription; }
     const QString& modality() const { return m_modality; }
     const QString& seriesNumber() const { return m_seriesNumber; }
+    const QPixmap& previewPixmap() const { return m_previewPixmap; }
+    const QString& representativeFilePath() const { return m_representativeFilePath; }
+    int imageCount() const { return m_imageCount; }
 
     void setSeriesInstanceUid(const QString& seriesInstanceUid) { m_seriesInstanceUid = seriesInstanceUid; }
     void setSeriesDescription(const QString& seriesDescription) { m_seriesDescription = seriesDescription; }
     void setModality(const QString& modality) { m_modality = modality; }
     void setSeriesNumber(const QString& seriesNumber) { m_seriesNumber = seriesNumber; }
+    void setPreviewPixmap(const QPixmap& previewPixmap) { m_previewPixmap = previewPixmap; }
+    void setRepresentativeFilePath(const QString& representativeFilePath) { m_representativeFilePath = representativeFilePath; }
+    void setImageCount(int imageCount) { m_imageCount = imageCount; }
 
     void addImage(std::unique_ptr<DicomImage> img)
     {
@@ -33,6 +39,9 @@ private:
     QString m_seriesDescription;
     QString m_modality;
     QString m_seriesNumber;
+    QPixmap m_previewPixmap;
+    QString m_representativeFilePath;
+    int m_imageCount{0};
     std::vector<std::unique_ptr<DicomImage>> m_images;
 };
 

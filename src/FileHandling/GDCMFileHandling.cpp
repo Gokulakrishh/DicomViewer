@@ -34,7 +34,7 @@ GDCMFileHandling::GDCMFileHandling()
     }
 }
 
-FileHandling::PatientList GDCMFileHandling::loadDicomFolder(const QString& folderPath)
+FileHandling::PatientList GDCMFileHandling::loadDicomFolder(const QString& folderPath, ProgressCallback progressCallback)
 {
     PatientList patients;
     std::map<QString, PatientPtr> patientMap;
@@ -46,11 +46,33 @@ FileHandling::PatientList GDCMFileHandling::loadDicomFolder(const QString& folde
         return patients;
     }
 
+    int totalRegularFiles = 0;
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(rootPath, errorCode))
+    {
+        if (errorCode)
+        {
+            break;
+        }
+
+        if (entry.is_regular_file())
+        {
+            ++totalRegularFiles;
+        }
+    }
+    errorCode.clear();
+
+    int processedRegularFiles = 0;
     for (const auto& entry : std::filesystem::recursive_directory_iterator(rootPath, errorCode))
     {
         if (errorCode || !entry.is_regular_file())
         {
             continue;
+        }
+
+        ++processedRegularFiles;
+        if (progressCallback)
+        {
+            progressCallback(processedRegularFiles, totalRegularFiles);
         }
 
         const QString filePath = QString::fromStdString(entry.path().string());

@@ -7,7 +7,8 @@
 Current capabilities:
 - DICOM import with `GDCM`
 - PostgreSQL persistence for `Patient -> Study -> Series -> DicomImage`
-- cached preview images stored in the database
+- lazy hierarchy loading for `Patient -> Study -> Series`
+- one cached preview image per series stored in the database
 - raw-slice DICOM viewing with true grayscale `WL/WW`
 - slice browsing with slider, mouse wheel, and cine playback
 - measurement tools:
@@ -27,7 +28,7 @@ Current capabilities:
   - loads DICOM tags and raw pixel data
 - `PostgreService`
   - stores and retrieves patient/study/series/image hierarchy
-  - stores preview PNG blobs for fast tree/preview reload
+  - stores one preview PNG per series for fast tree/preview reload
 
 ### Viewer
 - `ViewportSession`
@@ -64,6 +65,7 @@ Folder
   -> Patient / Study / Series / DicomImage hierarchy
   -> PostgreService
   -> PostgreSQL tables + preview PNG cache
+  -> background import progress
   -> tree refresh
 ```
 
@@ -116,7 +118,7 @@ cmake --build build -j4
 
 ## Runtime Configuration
 
-Database settings are runtime-only and are read from `config.ini`.
+Runtime settings are read from `config.ini`.
 
 Example:
 
@@ -129,9 +131,25 @@ userName=postgres
 password=your_password
 ```
 
+`config.ini` contains the non-secret AI settings:
+
+```ini
+[ai]
+provider=gemini
+baseUrl=https://generativelanguage.googleapis.com
+apiKey=
+model=gemini-2.5-flash
+defaultReasoningLevel=medium
+requestTimeoutMs=30000
+maxOutputTokens=2048
+```
+
+The `apiKey` value is stored directly in `config.ini`.
+Environment variables such as `DICOMVIEWER_AI_APIKEY` still override the file when needed.
+
 The app stores:
 - hierarchy metadata in PostgreSQL
-- preview PNG blobs in `dicom_images`
+- preview PNG blobs in `series`
 - original DICOM file path for raw reloading
 
 The raw DICOM file remains the source of truth for full-fidelity rendering.
@@ -155,4 +173,12 @@ Planned expansion areas:
 - persisted annotations / measurements
 - multi-viewport workflows
 
+## Next Stage Notes
 
+The current architecture is a solid scalable baseline for local browsing and viewing. The next stage is optimization and polish rather than another architectural rewrite.
+
+Planned next-stage work:
+- add a preview cache service so repeated patient/study clicks do not re-query and re-decode the same series thumbnail
+- move series loading to an async path for very large studies
+- add cancellation support for long-running import and search operations
+- add cache eviction policies for raw series buffers and derived MPR/volume data

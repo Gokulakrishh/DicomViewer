@@ -22,6 +22,22 @@ DicomGraphicsView::ToolMode MeasurementController::toolModeForIndex(int index)
     }
 }
 
+int MeasurementController::toolIndexForMode(DicomGraphicsView::ToolMode toolMode)
+{
+    switch (toolMode)
+    {
+    case DicomGraphicsView::ToolMode::Distance:
+        return 1;
+    case DicomGraphicsView::ToolMode::PixelProbe:
+        return 2;
+    case DicomGraphicsView::ToolMode::Angle:
+        return 3;
+    case DicomGraphicsView::ToolMode::Pan:
+    default:
+        return 0;
+    }
+}
+
 MeasurementController::DistanceResult MeasurementController::createDistanceResult(
     const DicomImage& image,
     const QPoint& startPixel,

@@ -11,7 +11,7 @@ class GDCMFileHandling : public FileHandling
 public:
     GDCMFileHandling();
 
-    PatientList loadDicomFolder(const QString& folderPath) override;
+    PatientList loadDicomFolder(const QString& folderPath, ProgressCallback progressCallback = {}) override;
     std::unique_ptr<MedicalImage> loadImage(const QString& filePath) override;
     std::unique_ptr<DicomImage> loadImageData(const QString& filePath) const;
     PatientPtr loadDicomHierarchy(const QString& filePath) override;

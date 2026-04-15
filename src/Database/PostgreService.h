@@ -20,11 +20,16 @@ public:
 
     bool savePatient(const PatientPtr& patient) override;
     PatientPtr getPatient(const QString& patientId) override;
-    QList<PatientPtr> getAllPatients() override;
+    QList<PatientPtr> getAllPatients(const QString& filterText = {}) override;
+    QList<StudyPtr> getStudiesForPatient(const QString& patientId, const QString& filterText = {}) override;
+    QList<SeriesPtr> getSeriesForStudy(const QString& studyInstanceUid, const QString& filterText = {}) override;
 
     StudyPtr getStudy(const QString& studyInstanceUid) override;
     SeriesPtr getSeries(const QString& seriesInstanceUid) override;
     DicomImagePtr getImage(const QString& sopInstanceUid) override;
+    QPixmap getPreviewForPatient(const QString& patientId) override;
+    QPixmap getPreviewForStudy(const QString& studyInstanceUid) override;
+    QPixmap getPreviewForSeries(const QString& seriesInstanceUid) override;
 
 private:
     bool ensureConnection();
@@ -35,6 +40,7 @@ private:
     void populateStudies(Patient& patient);
     void populateSeries(Study& study);
     void populateImages(Series& series);
+    QPixmap createSeriesPreviewPixmap(const Series& series) const;
     DicomImagePtr createImageFromQuery(const QSqlQuery& query) const;
 
 private:

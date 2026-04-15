@@ -22,8 +22,8 @@ set(CMAKE_AUTOUIC ON)
 # ----------------------------
 # Find dependencies
 # ----------------------------
-find_package(QT NAMES Qt6 REQUIRED COMPONENTS Core Gui Widgets Sql Concurrent)
-find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Gui Widgets Sql Concurrent)
+find_package(QT NAMES Qt6 REQUIRED COMPONENTS Core Gui Widgets Sql Concurrent Network)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Gui Widgets Sql Concurrent Network)
 message(STATUS "Qt major version: ${QT_VERSION_MAJOR}")
 
 find_package(GDCM REQUIRED)
@@ -37,9 +37,14 @@ message(STATUS "OpenCV version: ${OpenCV_VERSION}")
 # ----------------------------
 set(SRC_FILES
     src/Main/main.cpp
+    src/resources/styles.qrc
+    src/AI/GeminiAiAssistantService.cpp
+    src/AI/QtHttpAiServerClient.cpp
     src/AdvancedViewer/MprViewerWindow.cpp
     src/AdvancedViewer/WidgetsAdvancedViewerLauncher.cpp
+    src/Utilities/AppStyle.cpp
     src/Utilities/AppDialogBase.cpp
+    src/Utilities/AiApiKeyDialog.cpp
     src/Utilities/LoadingDialog.cpp
     src/Utilities/QSettingsAppConfigService.cpp
     src/Utilities/WarningDialog.cpp
@@ -62,10 +67,18 @@ set(SRC_FILES
     src/Database/PostgreService.cpp
 )
 set(HEADER_FILES
+    src/AI/AiChatTypes.h
+    src/AI/GeminiAiAssistantService.h
+    src/AI/IAiAssistantService.h
+    src/AI/IAiServerClient.h
+    src/AI/QtHttpAiServerClient.h
     src/AdvancedViewer/IAdvancedViewerLauncher.h
     src/AdvancedViewer/MprViewerWindow.h
     src/AdvancedViewer/WidgetsAdvancedViewerLauncher.h
+    src/Utilities/AiServiceSettings.h
+    src/Utilities/AppStyle.h
     src/Utilities/AppDialogBase.h
+    src/Utilities/AiApiKeyDialog.h
     src/Utilities/DatabaseSettings.h
     src/Utilities/IAppConfigService.h
     src/Utilities/IWarningDialogService.h
@@ -126,6 +139,7 @@ target_link_libraries(${PROJECT_NAME}
         Qt${QT_VERSION_MAJOR}::Widgets
         Qt${QT_VERSION_MAJOR}::Sql
         Qt${QT_VERSION_MAJOR}::Concurrent
+        Qt${QT_VERSION_MAJOR}::Network
         ${OpenCV_LIBS}
     	${GDCM_LIBRARIES}
         gdcmCommon

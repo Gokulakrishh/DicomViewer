@@ -13,6 +13,8 @@ public:
 
     void show(const QString& title, const QString& message);
     void setMessage(const QString& message);
+    void setProgressRange(int minimum, int maximum);
+    void setProgressValue(int value);
     void close();
 
 private:
