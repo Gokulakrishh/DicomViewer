@@ -22,6 +22,10 @@ build/
 build-*/
 cmake-build-*/
 
+# Mistaken SSH key filenames
+ eval "$(ssh-agent -s)"
+ eval "$(ssh-agent -s)".pub
+
 # Compiled binaries and libraries
 *.app
 *.a
