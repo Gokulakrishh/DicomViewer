@@ -7,5 +7,6 @@
         <file alias="icons/tool_angle.svg">icons/tool_angle.svg</file>
         <file alias="icons/cine_play.svg">icons/cine_play.svg</file>
         <file alias="icons/cine_pause.svg">icons/cine_pause.svg</file>
+        <file alias="qml/ThreeDViewer.qml">qml/ThreeDViewer.qml</file>
     </qresource>
 </RCC>

@@ -18,6 +18,7 @@ public:
     virtual ~FileHandling() = default;
     virtual PatientList loadDicomFolder(const QString& folderPath, ProgressCallback progressCallback = {}) = 0;
     virtual std::unique_ptr<MedicalImage> loadImage(const QString& filePath) = 0;
+    virtual std::unique_ptr<DicomImage> loadImageData(const QString& filePath) const = 0;
     virtual PatientPtr loadDicomHierarchy(const QString& filePath) = 0;
     virtual QStringList getSupportedFormats() const = 0;
     virtual bool canLoad(const QString& filePath) const = 0;

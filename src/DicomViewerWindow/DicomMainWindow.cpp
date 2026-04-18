@@ -44,7 +44,9 @@
 #include "Database/PostgreService.h"
 #include "FileHandling/GDCMFileHandling.h"
 #include "Model/MedicalImage.h"
+#include "Services/SeriesDataLoadService.h"
 #include "Services/VolumeBuilder.h"
+#include "Services/ThreeDProfiles/ThreeDProfileSelection.h"
 #include "Services/WindowingAnalysisService.h"
 
 namespace
@@ -323,11 +325,14 @@ void DicomMainWindow::setupMenuBar()
 
     m_openMprAction = new QAction("Open MPR Viewer", this);
     m_ui->viewMenu->addAction(m_openMprAction);
+    m_openThreeDAction = new QAction("3D", this);
+    m_ui->viewMenu->addAction(m_openThreeDAction);
 
     connect(m_openFileAction, &QAction::triggered, this, &DicomMainWindow::openImage);
     connect(m_openFolderAction, &QAction::triggered, this, &DicomMainWindow::openFolder);
     connect(m_aiPreferencesAction, &QAction::triggered, this, &DicomMainWindow::openAiPreferences);
     connect(m_openMprAction, &QAction::triggered, this, &DicomMainWindow::openMprViewer);
+    connect(m_openThreeDAction, &QAction::triggered, this, &DicomMainWindow::openThreeDViewer);
 }
 
 void DicomMainWindow::setupConnections()
@@ -821,8 +826,8 @@ void DicomMainWindow::openMprViewer()
         return;
     }
 
-    const auto currentSeries = m_viewportController->currentSeries();
-    if (!currentSeries || currentSeries->images().size() < 2)
+    const auto selectedSeries = m_viewportController->currentSeries();
+    if (!selectedSeries || selectedSeries->images().size() < 2)
     {
         m_warningDialogService->showWarning("MPR Viewer", "Select a multi-slice series before opening MPR.");
         return;
@@ -831,7 +836,7 @@ void DicomMainWindow::openMprViewer()
     LoadingDialog loadingDialog(this);
     loadingDialog.show("Loading MPR", "Preparing MPR viewer...");
 
-    for (auto& image : currentSeries->images())
+    for (auto& image : selectedSeries->images())
     {
         if (!image)
         {
@@ -852,7 +857,8 @@ void DicomMainWindow::openMprViewer()
     try
     {
         loadingDialog.setMessage("Building MPR volume...");
-        volume = m_volumeBuilder->buildFromSeries(*currentSeries);
+        const Series& diagnosticSeries = *selectedSeries;
+        volume = m_volumeBuilder->buildFromDiagnosticSeries(diagnosticSeries);
     }
     catch (const std::exception& exception)
     {
@@ -869,13 +875,13 @@ void DicomMainWindow::openMprViewer()
     }
 
     QString title = "MPR Viewer";
-    if (!currentSeries->seriesDescription().trimmed().isEmpty())
+    if (!selectedSeries->seriesDescription().trimmed().isEmpty())
     {
-        title += " - " + currentSeries->seriesDescription().trimmed();
+        title += " - " + selectedSeries->seriesDescription().trimmed();
     }
-    else if (!currentSeries->modality().trimmed().isEmpty())
+    else if (!selectedSeries->modality().trimmed().isEmpty())
     {
-        title += " - " + currentSeries->modality().trimmed();
+        title += " - " + selectedSeries->modality().trimmed();
     }
 
     QWidget* viewer = m_advancedViewerLauncher->showMprVolume(
@@ -883,6 +889,71 @@ void DicomMainWindow::openMprViewer()
         title,
         m_viewportController->currentWindowLevel(),
         m_viewportController->currentWindowWidth(),
+        this);
+    loadingDialog.close();
+    if (viewer)
+    {
+        viewer->raise();
+        viewer->activateWindow();
+    }
+}
+
+void DicomMainWindow::openThreeDViewer()
+{
+    if (!m_viewportController || !m_volumeBuilder || !m_advancedViewerLauncher || !m_gdcmHandler)
+    {
+        return;
+    }
+
+    const auto selectedSeries = m_viewportController->currentSeries();
+    if (!selectedSeries || selectedSeries->images().size() < 2)
+    {
+        m_warningDialogService->showWarning("3D Viewer", "Select a multi-slice series before opening 3D.");
+        return;
+    }
+
+    LoadingDialog loadingDialog(this);
+    loadingDialog.show("Loading 3D", "Preparing 3D viewer...");
+
+    std::shared_ptr<IVolumeData> diagnosticVolume;
+    const ThreeDProfileSelection profileSelection = ThreeDProfileSelector::selectForSeries(*selectedSeries);
+    try
+    {
+        loadingDialog.setMessage("Loading diagnostic series...");
+        SeriesDataLoadService seriesDataLoadService(*m_gdcmHandler);
+        const Series diagnosticSeries = seriesDataLoadService.loadDiagnosticSeries(*selectedSeries);
+
+        loadingDialog.setMessage("Building 3D volume...");
+        diagnosticVolume = m_volumeBuilder->buildFromDiagnosticSeries(diagnosticSeries);
+    }
+    catch (const std::exception& exception)
+    {
+        loadingDialog.close();
+        m_warningDialogService->showWarning("3D Viewer", QString("Failed to prepare 3D volume: %1").arg(exception.what()));
+        return;
+    }
+
+    if (!diagnosticVolume)
+    {
+        loadingDialog.close();
+        m_warningDialogService->showWarning("3D Viewer", "Unable to build a 3D volume from the selected series.");
+        return;
+    }
+
+    QString title = "3D Viewer";
+    if (!selectedSeries->seriesDescription().trimmed().isEmpty())
+    {
+        title += " - " + selectedSeries->seriesDescription().trimmed();
+    }
+    else if (!selectedSeries->modality().trimmed().isEmpty())
+    {
+        title += " - " + selectedSeries->modality().trimmed();
+    }
+
+    QWidget* viewer = m_advancedViewerLauncher->showThreeDVolume(
+        std::move(diagnosticVolume),
+        title,
+        profileSelection,
         this);
     loadingDialog.close();
     if (viewer)
@@ -1137,13 +1208,13 @@ AiChatRequest DicomMainWindow::buildAiChatRequest(const QString& userPrompt, boo
 
     if (includeCurrentImage && m_viewportController)
     {
-        const auto renderedImage = m_viewportController->renderCurrentImage();
-        if (renderedImage && !renderedImage->pixmap().isNull())
+        const auto diagnosticImage = m_viewportController->renderCurrentDiagnosticImage();
+        if (diagnosticImage && !diagnosticImage->pixmap().isNull())
         {
             QByteArray imageBytes;
             QBuffer buffer(&imageBytes);
             buffer.open(QIODevice::WriteOnly);
-            renderedImage->pixmap().toImage().save(&buffer, "PNG");
+            diagnosticImage->pixmap().toImage().save(&buffer, "PNG");
             if (!imageBytes.isEmpty())
             {
                 userMessage.imageAttachments.append({QStringLiteral("image/png"), imageBytes});
@@ -1848,13 +1919,13 @@ void DicomMainWindow::applyImageAdjustments()
         m_windowWidthValueLabel->setText(QString::number(windowWidth));
     }
 
-    auto adjustedImageModel = m_viewportController->renderCurrentImage();
-    if (!adjustedImageModel)
+    auto diagnosticImageModel = m_viewportController->renderCurrentDiagnosticImage();
+    if (!diagnosticImageModel)
     {
         m_view->clearImage();
         return;
     }
-    m_view->setImage(adjustedImageModel);
+    m_view->setImage(diagnosticImageModel);
 }
 
 void DicomMainWindow::onToolChanged(DicomGraphicsView::ToolMode toolMode)

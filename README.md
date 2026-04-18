@@ -1,6 +1,6 @@
 # DicomViewer
 
-`DicomViewer` is a `Qt 6` / `C++20` desktop application for browsing and viewing DICOM studies with PostgreSQL-backed hierarchy indexing, lazy loading, MPR, measurement tools, and an optional AI assistant. The current codebase is a professional-grade desktop viewer foundation aimed at scaling to larger datasets and richer clinical-style workflows.
+`DicomViewer` is a `Qt 6` / `C++20` desktop application for browsing and viewing DICOM studies with PostgreSQL-backed hierarchy indexing, MPR, measurement tools, and an optional AI assistant. The current codebase is a professional-grade desktop viewer foundation aimed at scaling to larger datasets and richer clinical-style workflows.
 
 ## Features
 

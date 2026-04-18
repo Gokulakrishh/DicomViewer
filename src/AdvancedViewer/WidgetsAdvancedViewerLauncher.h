@@ -13,4 +13,10 @@ public:
         int windowLevel,
         int windowWidth,
         QWidget* parent = nullptr) override;
+
+    QWidget* showThreeDVolume(
+        std::shared_ptr<IVolumeData> diagnosticVolume,
+        const QString& title,
+        ThreeDProfileSelection profileSelection,
+        QWidget* parent = nullptr) override;
 };

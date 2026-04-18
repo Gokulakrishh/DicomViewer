@@ -57,7 +57,7 @@ public:
 
     bool prepareCurrentSeriesImage(bool cinePlaying, QString* errorMessage = nullptr);
     WindowControlState windowControlState(bool resetWindowState);
-    std::shared_ptr<DicomImage> renderCurrentImage() const;
+    std::shared_ptr<DicomImage> renderCurrentDiagnosticImage() const;
 
     void setWindowLevel(int value);
     void setWindowWidth(int value);

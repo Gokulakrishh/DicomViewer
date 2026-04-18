@@ -91,6 +91,7 @@ private:
     void loadSeries(const std::shared_ptr<Series>& series, int initialIndex = 0);
     void loadAndDisplayImage(const QString& filePath);
     void openMprViewer();
+    void openThreeDViewer();
     void openAiPreferences();
     void appendAiMessage(const QString& speaker, const QString& message);
     QString normalizedAiSpeakerName(const QString& speaker) const;
@@ -159,6 +160,7 @@ private:
     QAction* m_openFileAction{nullptr};
     QAction* m_openFolderAction{nullptr};
     QAction* m_openMprAction{nullptr};
+    QAction* m_openThreeDAction{nullptr};
     QAction* m_aiPreferencesAction{nullptr};
     std::unique_ptr<IAppConfigService> m_appConfigService;
     std::unique_ptr<FileHandling> m_gdcmHandler;

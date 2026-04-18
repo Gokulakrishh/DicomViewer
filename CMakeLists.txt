@@ -22,7 +22,7 @@ set(CMAKE_AUTOUIC ON)
 # ----------------------------
 # Find dependencies
 # ----------------------------
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Sql Concurrent Network)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Sql Concurrent Network Qml Quick QuickWidgets Quick3D)
 message(STATUS "Qt major version: 6")
 
 find_package(GDCM REQUIRED)
@@ -30,6 +30,72 @@ message(STATUS "GDCM")
 
 find_package(OpenCV 4.6 REQUIRED core imgproc imgcodecs)
 message(STATUS "OpenCV version: ${OpenCV_VERSION}")
+
+set(APP_3D_MODEL_SOURCES
+    src/Model/MeshData.cpp
+    src/Model/MeshBuilder.cpp
+    src/Model/SegmentationMaskData.cpp
+)
+
+set(APP_3D_MODEL_HEADERS
+    src/Model/MeshConcepts.h
+    src/Model/IMeshData.h
+    src/Model/MeshData.h
+    src/Model/MeshData.tpp
+    src/Model/MeshBuilder.h
+    src/Model/MeshBuilder.tpp
+    src/Model/ISegmentationMask.h
+    src/Model/SegmentationMaskData.h
+    src/Model/SegmentationMaskData.tpp
+)
+
+set(APP_3D_SERVICE_SOURCES
+    src/Services/CompositeMeshPostProcessor.cpp
+    src/Services/SeriesDataLoadService.cpp
+    src/Services/ThreeDSeriesBuildService.cpp
+    src/Services/ThreeDimensionalPipelineService.cpp
+    src/Services/ThreeDProfiles/Bone3dPipelineProfile.cpp
+    src/Services/ThreeDProfiles/Lung3dPipelineProfile.cpp
+    src/Services/ThreeDProfiles/ThreeDProfileSelection.cpp
+    src/Services/ThreeDMesh/LaplacianMeshSmoothingPostProcessor.cpp
+    src/Services/ThreeDMesh/MarchingCubesMeshExtractionStrategy.cpp
+    src/Services/ThreeDMesh/MeshNormalGenerationPostProcessor.cpp
+    src/Services/ThreeDSegmentation/KeepLargestNComponentsStrategy.cpp
+    src/Services/ThreeDSegmentation/ThresholdSegmentationStrategy.cpp
+)
+
+set(APP_3D_SERVICE_HEADERS
+    src/Services/CompositeMeshPostProcessor.h
+    src/Services/IConnectedComponentStrategy.h
+    src/Services/IMeshExtractionStrategy.h
+    src/Services/IMeshPostProcessor.h
+    src/Services/ISegmentationStrategy.h
+    src/Services/SeriesDataLoadService.h
+    src/Services/ThreeDSeriesBuildService.h
+    src/Services/ThreeDimensionalPipelineResult.h
+    src/Services/ThreeDimensionalPipelineService.h
+    src/Services/ThreeDProfiles/Bone3dPipelineProfile.h
+    src/Services/ThreeDProfiles/I3dPipelineProfile.h
+    src/Services/ThreeDProfiles/Lung3dPipelineProfile.h
+    src/Services/ThreeDProfiles/ThreeDProfileSelection.h
+    src/Services/ThreeDMesh/LaplacianMeshSmoothingPostProcessor.h
+    src/Services/ThreeDMesh/MarchingCubesMeshExtractionStrategy.h
+    src/Services/ThreeDMesh/MeshNormalGenerationPostProcessor.h
+    src/Services/ThreeDSegmentation/KeepLargestNComponentsStrategy.h
+    src/Services/ThreeDSegmentation/ThresholdSegmentationStrategy.h
+)
+
+set(APP_QML3D_SOURCES
+    src/Qml3D/MeshSceneAdapter.cpp
+    src/Qml3D/QmlMeshGeometry.cpp
+    src/Qml3D/ThreeDViewerController.cpp
+)
+
+set(APP_QML3D_HEADERS
+    src/Qml3D/MeshSceneAdapter.h
+    src/Qml3D/QmlMeshGeometry.h
+    src/Qml3D/ThreeDViewerController.h
+)
  
 # ----------------------------
 # Source files
@@ -40,6 +106,7 @@ set(SRC_FILES
     src/AI/GeminiAiAssistantService.cpp
     src/AI/QtHttpAiServerClient.cpp
     src/AdvancedViewer/MprViewerWindow.cpp
+    src/AdvancedViewer/ThreeDViewerWindow.cpp
     src/AdvancedViewer/WidgetsAdvancedViewerLauncher.cpp
     src/Utilities/AppStyle.cpp
     src/Utilities/AppDialogBase.cpp
@@ -64,6 +131,9 @@ set(SRC_FILES
     src/VTKwidget/VTKwidget.cpp
     src/Database/PostgreConnection.cpp
     src/Database/PostgreService.cpp
+    ${APP_3D_MODEL_SOURCES}
+    ${APP_3D_SERVICE_SOURCES}
+    ${APP_QML3D_SOURCES}
 )
 set(HEADER_FILES
     src/AI/AiChatTypes.h
@@ -73,12 +143,14 @@ set(HEADER_FILES
     src/AI/QtHttpAiServerClient.h
     src/AdvancedViewer/IAdvancedViewerLauncher.h
     src/AdvancedViewer/MprViewerWindow.h
+    src/AdvancedViewer/ThreeDViewerWindow.h
     src/AdvancedViewer/WidgetsAdvancedViewerLauncher.h
     src/Utilities/AiServiceSettings.h
     src/Utilities/AppStyle.h
     src/Utilities/AppDialogBase.h
     src/Utilities/AiApiKeyDialog.h
     src/Utilities/DatabaseSettings.h
+    src/Utilities/Math3D.h
     src/Utilities/IAppConfigService.h
     src/Utilities/IWarningDialogService.h
     src/Utilities/LoadingDialog.h
@@ -110,6 +182,9 @@ set(HEADER_FILES
     src/Database/PostgreConnection.h
     src/Database/DatabaseService.h
     src/Database/PostgreService.h
+    ${APP_3D_MODEL_HEADERS}
+    ${APP_3D_SERVICE_HEADERS}
+    ${APP_QML3D_HEADERS}
 )
 
 # ----------------------------
@@ -139,6 +214,10 @@ target_link_libraries(${PROJECT_NAME}
         Qt6::Sql
         Qt6::Concurrent
         Qt6::Network
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickWidgets
+        Qt6::Quick3D
         ${OpenCV_LIBS}
     	${GDCM_LIBRARIES}
         gdcmCommon
@@ -189,3 +268,57 @@ install(TARGETS ${PROJECT_NAME}
     BUNDLE DESTINATION .
     RUNTIME DESTINATION bin
     )
+
+add_executable(ThreeDPipelineHarness
+    tests/ThreeDPipelineHarness.cpp
+    src/Model/DicomImage.cpp
+    ${APP_3D_MODEL_SOURCES}
+    src/Services/VolumeBuilder.cpp
+    ${APP_3D_SERVICE_SOURCES}
+    ${APP_3D_MODEL_HEADERS}
+    ${APP_3D_SERVICE_HEADERS}
+)
+
+target_include_directories(ThreeDPipelineHarness PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    /usr/include/gdcm-3.0
+)
+
+target_link_libraries(ThreeDPipelineHarness
+    PRIVATE
+        Qt6::Core
+        Qt6::Gui
+)
+
+add_executable(ThreeDSeriesCli
+    tests/ThreeDSeriesCli.cpp
+    src/FileHandling/GDCMFileHandling.cpp
+    src/DicomViewerWindow/DicomRenderService.cpp
+    src/Model/DicomImage.cpp
+    ${APP_3D_MODEL_SOURCES}
+    src/Services/VolumeBuilder.cpp
+    src/Services/ThreeDSeriesBuildService.cpp
+    ${APP_3D_SERVICE_SOURCES}
+    ${APP_3D_MODEL_HEADERS}
+    ${APP_3D_SERVICE_HEADERS}
+    src/FileHandling/FileHandling.h
+    src/FileHandling/GDCMFileHandling.h
+)
+
+target_include_directories(ThreeDSeriesCli PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    /usr/include/gdcm-3.0
+)
+
+target_link_libraries(ThreeDSeriesCli
+    PRIVATE
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Widgets
+        ${OpenCV_LIBS}
+        ${GDCM_LIBRARIES}
+        gdcmCommon
+        gdcmMSFF
+        gdcmIOD
+        gdcmDSED
+)

@@ -16,7 +16,7 @@ class VolumeBuilder
 public:
     explicit VolumeBuilder(VolumeValidationSettings validationSettings = {});
 
-    std::shared_ptr<IVolumeData> buildFromSeries(const Series& series) const;
+    std::shared_ptr<IVolumeData> buildFromDiagnosticSeries(const Series& diagnosticSeries) const;
 
 private:
     struct SliceBasis

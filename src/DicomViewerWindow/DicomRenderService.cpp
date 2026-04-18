@@ -31,18 +31,18 @@ QImage createWindowedImage(const DicomImage& image, int windowLevel, int windowW
 }
 }
 
-void DicomRenderService::ensureDefaultPixmap(DicomImage& image) const
+void DicomRenderService::ensureDiagnosticPixmap(DicomImage& image) const
 {
     if (image.pixmap().isNull() && image.hasRawPixels())
     {
-        image.setPixmap(renderImage(
+        image.setPixmap(renderDiagnosticImage(
                             image,
                             RenderSettings{image.defaultWindowLevel(), image.defaultWindowWidth()})
                             ->pixmap());
     }
 }
 
-std::shared_ptr<DicomImage> DicomRenderService::renderImage(
+std::shared_ptr<DicomImage> DicomRenderService::renderDiagnosticImage(
     const DicomImage& image,
     const RenderSettings& settings) const
 {

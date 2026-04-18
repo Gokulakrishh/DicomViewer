@@ -320,9 +320,9 @@ std::vector<int16_t> VolumeBuilder::buildVoxelBuffer(const VolumeInput& input)
     return voxels;
 }
 
-std::shared_ptr<IVolumeData> VolumeBuilder::buildFromSeries(const Series& series) const
+std::shared_ptr<IVolumeData> VolumeBuilder::buildFromDiagnosticSeries(const Series& diagnosticSeries) const
 {
-    VolumeInput input = collectVolumeInput(series);
+    VolumeInput input = collectVolumeInput(diagnosticSeries);
     if (!input.firstImage)
     {
         return {};

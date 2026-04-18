@@ -13,7 +13,7 @@ public:
 
     PatientList loadDicomFolder(const QString& folderPath, ProgressCallback progressCallback = {}) override;
     std::unique_ptr<MedicalImage> loadImage(const QString& filePath) override;
-    std::unique_ptr<DicomImage> loadImageData(const QString& filePath) const;
+    std::unique_ptr<DicomImage> loadImageData(const QString& filePath) const override;
     PatientPtr loadDicomHierarchy(const QString& filePath) override;
     QStringList getSupportedFormats() const override;
     bool canLoad(const QString& filePath) const override;

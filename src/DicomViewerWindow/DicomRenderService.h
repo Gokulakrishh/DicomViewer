@@ -13,6 +13,6 @@ public:
         int windowWidth{100};
     };
 
-    void ensureDefaultPixmap(DicomImage& image) const;
-    std::shared_ptr<DicomImage> renderImage(const DicomImage& image, const RenderSettings& settings) const;
+    void ensureDiagnosticPixmap(DicomImage& image) const;
+    std::shared_ptr<DicomImage> renderDiagnosticImage(const DicomImage& image, const RenderSettings& settings) const;
 };

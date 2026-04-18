@@ -42,7 +42,7 @@ bool DicomViewportController::ensureImageLoaded(DicomImage& image)
     {
         if (image.pixmap().isNull() && m_renderService)
         {
-            m_renderService->ensureDefaultPixmap(image);
+            m_renderService->ensureDiagnosticPixmap(image);
         }
         return true;
     }
@@ -70,7 +70,7 @@ bool DicomViewportController::ensureImageLoaded(DicomImage& image)
         image = *loadedDicomImage;
         if (image.hasRawPixels() && image.pixmap().isNull() && m_renderService)
         {
-            m_renderService->ensureDefaultPixmap(image);
+            m_renderService->ensureDiagnosticPixmap(image);
         }
         return image.isValid();
     }
@@ -264,7 +264,7 @@ DicomViewportController::WindowControlState DicomViewportController::windowContr
     return state;
 }
 
-std::shared_ptr<DicomImage> DicomViewportController::renderCurrentImage() const
+std::shared_ptr<DicomImage> DicomViewportController::renderCurrentDiagnosticImage() const
 {
     const DicomImage* displayedImage = currentImage();
     if (!displayedImage || !displayedImage->isValid())
@@ -272,17 +272,17 @@ std::shared_ptr<DicomImage> DicomViewportController::renderCurrentImage() const
         return {};
     }
 
-    auto adjustedImageModel = std::make_shared<DicomImage>(*displayedImage);
+    auto diagnosticImageModel = std::make_shared<DicomImage>(*displayedImage);
     if (m_renderService)
     {
-        return m_renderService->renderImage(
+        return m_renderService->renderDiagnosticImage(
             *displayedImage,
             DicomRenderService::RenderSettings{
                 m_session.currentWindowLevel,
                 m_session.currentWindowWidth});
     }
 
-    return adjustedImageModel;
+    return diagnosticImageModel;
 }
 
 void DicomViewportController::setWindowLevel(int value)

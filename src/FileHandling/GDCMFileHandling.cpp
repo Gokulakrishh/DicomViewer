@@ -273,7 +273,7 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(
     QVector<char> buffer(static_cast<qsizetype>(bufferLength));
     if (!gdcmImage.GetBuffer(buffer.data()))
     {
-        qDebug() << "Failed to get pixel buffer for:" << filePath;
+         qDebug() << "Failed to get pixel buffer for:" << filePath;
         return nullptr;
     }
 
@@ -440,9 +440,9 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(
     }
     else
     {
-        qDebug() << "Unsupported DICOM pixel format for:" << filePath
-                 << "samplesPerPixel=" << samplesPerPixel
-                 << "bitsAllocated=" << bitsAllocated;
+         qDebug() << "Unsupported DICOM pixel format for:" << filePath
+                    << "samplesPerPixel=" << samplesPerPixel
+                     << "bitsAllocated=" << bitsAllocated;
         return nullptr;
     }
 
@@ -493,7 +493,7 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(
             DicomRenderService renderService;
             dicomImage->setPixmap(
                 renderService
-                    .renderImage(
+                    .renderDiagnosticImage(
                         *dicomImage,
                         DicomRenderService::RenderSettings{defaultWindowLevel, defaultWindowWidth})
                     ->pixmap());
