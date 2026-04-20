@@ -19,6 +19,8 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
+option(DICOMVIEWER_ENABLE_VTK "Enable VTK-based 3D volume rendering integration" OFF)
+
 # ----------------------------
 # Find dependencies
 # ----------------------------
@@ -54,6 +56,7 @@ set(APP_3D_SERVICE_SOURCES
     src/Services/SeriesDataLoadService.cpp
     src/Services/ThreeDSeriesBuildService.cpp
     src/Services/ThreeDimensionalPipelineService.cpp
+    src/Services/VolumeRenderPreprocessingService.cpp
     src/Services/ThreeDProfiles/Bone3dPipelineProfile.cpp
     src/Services/ThreeDProfiles/Lung3dPipelineProfile.cpp
     src/Services/ThreeDProfiles/ThreeDProfileSelection.cpp
@@ -74,6 +77,7 @@ set(APP_3D_SERVICE_HEADERS
     src/Services/ThreeDSeriesBuildService.h
     src/Services/ThreeDimensionalPipelineResult.h
     src/Services/ThreeDimensionalPipelineService.h
+    src/Services/VolumeRenderPreprocessingService.h
     src/Services/ThreeDProfiles/Bone3dPipelineProfile.h
     src/Services/ThreeDProfiles/I3dPipelineProfile.h
     src/Services/ThreeDProfiles/Lung3dPipelineProfile.h
@@ -96,6 +100,38 @@ set(APP_QML3D_HEADERS
     src/Qml3D/QmlMeshGeometry.h
     src/Qml3D/ThreeDViewerController.h
 )
+
+set(APP_VTK_VIEWER_SOURCES)
+set(APP_VTK_VIEWER_HEADERS)
+
+if(DICOMVIEWER_ENABLE_VTK)
+    find_package(VTK REQUIRED COMPONENTS
+        CommonCore
+        CommonDataModel
+        GUISupportQt
+        InteractionStyle
+        RenderingCore
+        RenderingOpenGL2
+        RenderingVolumeOpenGL2
+    )
+    message(STATUS "VTK version: ${VTK_VERSION}")
+
+    list(APPEND APP_VTK_VIEWER_SOURCES
+        src/VTK/Adapters/VtkVolumeAdapter.cpp
+        src/VTK/Camera/VtkVolumeCameraController.cpp
+        src/VTK/Presets/VtkVolumeRenderPreset.cpp
+        src/VTK/Presets/VtkVolumePresetLibrary.cpp
+        src/VTK/Viewer/VtkVolumeViewerWindow.cpp
+    )
+
+    list(APPEND APP_VTK_VIEWER_HEADERS
+        src/VTK/Adapters/VtkVolumeAdapter.h
+        src/VTK/Camera/VtkVolumeCameraController.h
+        src/VTK/Presets/VtkVolumeRenderPreset.h
+        src/VTK/Presets/VtkVolumePresetLibrary.h
+        src/VTK/Viewer/VtkVolumeViewerWindow.h
+    )
+endif()
  
 # ----------------------------
 # Source files
@@ -128,12 +164,12 @@ set(SRC_FILES
     src/Services/MprRenderService.cpp
     src/Services/WindowingAnalysisService.cpp
     src/Utilities/WarningDialogService.cpp
-    src/VTKwidget/VTKwidget.cpp
     src/Database/PostgreConnection.cpp
     src/Database/PostgreService.cpp
     ${APP_3D_MODEL_SOURCES}
     ${APP_3D_SERVICE_SOURCES}
     ${APP_QML3D_SOURCES}
+    ${APP_VTK_VIEWER_SOURCES}
 )
 set(HEADER_FILES
     src/AI/AiChatTypes.h
@@ -177,7 +213,6 @@ set(HEADER_FILES
     src/Services/WindowingAnalysisService.h
     src/Utilities/WarningDialog.h
     src/Utilities/WarningDialogService.h
-    src/VTKwidget/VTKwidget.h
     src/Database/DatabaseConnection.h
     src/Database/PostgreConnection.h
     src/Database/DatabaseService.h
@@ -185,6 +220,7 @@ set(HEADER_FILES
     ${APP_3D_MODEL_HEADERS}
     ${APP_3D_SERVICE_HEADERS}
     ${APP_QML3D_HEADERS}
+    ${APP_VTK_VIEWER_HEADERS}
 )
 
 # ----------------------------
@@ -225,6 +261,16 @@ target_link_libraries(${PROJECT_NAME}
         gdcmIOD
         gdcmDSED
 )
+
+if(DICOMVIEWER_ENABLE_VTK)
+    target_link_libraries(${PROJECT_NAME} PRIVATE ${VTK_LIBRARIES})
+    target_compile_definitions(${PROJECT_NAME} PRIVATE DICOMVIEWER_ENABLE_VTK=1)
+
+    vtk_module_autoinit(
+        TARGETS ${PROJECT_NAME}
+        MODULES ${VTK_LIBRARIES}
+    )
+endif()
 
 # ----------------------------
 # Build output folders
