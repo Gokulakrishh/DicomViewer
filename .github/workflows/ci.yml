@@ -25,6 +25,9 @@ jobs:
             pkg-config \
             qt6-base-dev \
             qt6-base-dev-tools \
+            qt6-declarative-dev \
+            qt6-declarative-dev-tools \
+            qt6-quick3d-dev \
             libqt6sql6-psql \
             libopencv-dev \
             libgdcm-dev \
