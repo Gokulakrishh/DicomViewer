@@ -24,8 +24,17 @@ option(DICOMVIEWER_ENABLE_VTK "Enable VTK-based 3D volume rendering integration"
 # ----------------------------
 # Find dependencies
 # ----------------------------
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Sql Concurrent Network Qml Quick QuickWidgets Quick3D)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Sql Concurrent Network)
+find_package(Qt6 QUIET COMPONENTS Qml Quick QuickWidgets Quick3D)
 message(STATUS "Qt major version: 6")
+
+set(DICOMVIEWER_ENABLE_QML3D OFF)
+if(TARGET Qt6::Qml AND TARGET Qt6::Quick AND TARGET Qt6::QuickWidgets AND TARGET Qt6::Quick3D)
+    set(DICOMVIEWER_ENABLE_QML3D ON)
+    message(STATUS "Legacy QML 3D viewer enabled")
+else()
+    message(STATUS "Legacy QML 3D viewer disabled: Qt Qml/Quick/QuickWidgets/Quick3D stack not fully available")
+endif()
 
 find_package(GDCM REQUIRED)
 message(STATUS "GDCM")
@@ -89,17 +98,32 @@ set(APP_3D_SERVICE_HEADERS
     src/Services/ThreeDSegmentation/ThresholdSegmentationStrategy.h
 )
 
-set(APP_QML3D_SOURCES
-    src/Qml3D/MeshSceneAdapter.cpp
-    src/Qml3D/QmlMeshGeometry.cpp
-    src/Qml3D/ThreeDViewerController.cpp
-)
+set(APP_QML3D_SOURCES)
+set(APP_QML3D_HEADERS)
+set(APP_QML3D_VIEWER_SOURCES)
+set(APP_QML3D_VIEWER_HEADERS)
 
-set(APP_QML3D_HEADERS
-    src/Qml3D/MeshSceneAdapter.h
-    src/Qml3D/QmlMeshGeometry.h
-    src/Qml3D/ThreeDViewerController.h
-)
+if(DICOMVIEWER_ENABLE_QML3D)
+    list(APPEND APP_QML3D_SOURCES
+        src/Qml3D/MeshSceneAdapter.cpp
+        src/Qml3D/QmlMeshGeometry.cpp
+        src/Qml3D/ThreeDViewerController.cpp
+    )
+
+    list(APPEND APP_QML3D_HEADERS
+        src/Qml3D/MeshSceneAdapter.h
+        src/Qml3D/QmlMeshGeometry.h
+        src/Qml3D/ThreeDViewerController.h
+    )
+
+    list(APPEND APP_QML3D_VIEWER_SOURCES
+        src/AdvancedViewer/ThreeDViewerWindow.cpp
+    )
+
+    list(APPEND APP_QML3D_VIEWER_HEADERS
+        src/AdvancedViewer/ThreeDViewerWindow.h
+    )
+endif()
 
 set(APP_VTK_VIEWER_SOURCES)
 set(APP_VTK_VIEWER_HEADERS)
@@ -142,7 +166,6 @@ set(SRC_FILES
     src/AI/GeminiAiAssistantService.cpp
     src/AI/QtHttpAiServerClient.cpp
     src/AdvancedViewer/MprViewerWindow.cpp
-    src/AdvancedViewer/ThreeDViewerWindow.cpp
     src/AdvancedViewer/WidgetsAdvancedViewerLauncher.cpp
     src/Utilities/AppStyle.cpp
     src/Utilities/AppDialogBase.cpp
@@ -169,6 +192,7 @@ set(SRC_FILES
     ${APP_3D_MODEL_SOURCES}
     ${APP_3D_SERVICE_SOURCES}
     ${APP_QML3D_SOURCES}
+    ${APP_QML3D_VIEWER_SOURCES}
     ${APP_VTK_VIEWER_SOURCES}
 )
 set(HEADER_FILES
@@ -179,7 +203,6 @@ set(HEADER_FILES
     src/AI/QtHttpAiServerClient.h
     src/AdvancedViewer/IAdvancedViewerLauncher.h
     src/AdvancedViewer/MprViewerWindow.h
-    src/AdvancedViewer/ThreeDViewerWindow.h
     src/AdvancedViewer/WidgetsAdvancedViewerLauncher.h
     src/Utilities/AiServiceSettings.h
     src/Utilities/AppStyle.h
@@ -220,6 +243,7 @@ set(HEADER_FILES
     ${APP_3D_MODEL_HEADERS}
     ${APP_3D_SERVICE_HEADERS}
     ${APP_QML3D_HEADERS}
+    ${APP_QML3D_VIEWER_HEADERS}
     ${APP_VTK_VIEWER_HEADERS}
 )
 
@@ -250,10 +274,6 @@ target_link_libraries(${PROJECT_NAME}
         Qt6::Sql
         Qt6::Concurrent
         Qt6::Network
-        Qt6::Qml
-        Qt6::Quick
-        Qt6::QuickWidgets
-        Qt6::Quick3D
         ${OpenCV_LIBS}
     	${GDCM_LIBRARIES}
         gdcmCommon
@@ -270,6 +290,17 @@ if(DICOMVIEWER_ENABLE_VTK)
         TARGETS ${PROJECT_NAME}
         MODULES ${VTK_LIBRARIES}
     )
+endif()
+
+if(DICOMVIEWER_ENABLE_QML3D)
+    target_link_libraries(${PROJECT_NAME}
+        PRIVATE
+            Qt6::Qml
+            Qt6::Quick
+            Qt6::QuickWidgets
+            Qt6::Quick3D
+    )
+    target_compile_definitions(${PROJECT_NAME} PRIVATE DICOMVIEWER_ENABLE_QML3D=1)
 endif()
 
 # ----------------------------

@@ -3,7 +3,7 @@
 #include "MprViewerWindow.h"
 #if defined(DICOMVIEWER_ENABLE_VTK)
 #include "VTK/Viewer/VtkVolumeViewerWindow.h"
-#else
+#elif defined(DICOMVIEWER_ENABLE_QML3D)
 #include "ThreeDViewerWindow.h"
 #endif
 
@@ -31,8 +31,14 @@ QWidget* WidgetsAdvancedViewerLauncher::showThreeDVolume(
 {
 #if defined(DICOMVIEWER_ENABLE_VTK)
     auto* viewer = new VtkVolumeViewerWindow(std::move(diagnosticVolume), std::move(profileSelection), parent);
-#else
+#elif defined(DICOMVIEWER_ENABLE_QML3D)
     auto* viewer = new ThreeDViewerWindow(std::move(diagnosticVolume), std::move(profileSelection), parent);
+#else
+    Q_UNUSED(diagnosticVolume);
+    Q_UNUSED(title);
+    Q_UNUSED(profileSelection);
+    Q_UNUSED(parent);
+    return nullptr;
 #endif
     viewer->setAttribute(Qt::WA_DeleteOnClose);
     viewer->setWindowTitle(title);
