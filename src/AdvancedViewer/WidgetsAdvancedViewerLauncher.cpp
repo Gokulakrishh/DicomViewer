@@ -29,10 +29,12 @@ QWidget* WidgetsAdvancedViewerLauncher::showThreeDVolume(
     ThreeDProfileSelection profileSelection,
     QWidget* parent)
 {
+    QWidget* viewer = nullptr;
+
 #if defined(DICOMVIEWER_ENABLE_VTK)
-    auto* viewer = new VtkVolumeViewerWindow(std::move(diagnosticVolume), std::move(profileSelection), parent);
+    viewer = new VtkVolumeViewerWindow(std::move(diagnosticVolume), std::move(profileSelection), parent);
 #elif defined(DICOMVIEWER_ENABLE_QML3D)
-    auto* viewer = new ThreeDViewerWindow(std::move(diagnosticVolume), std::move(profileSelection), parent);
+    viewer = new ThreeDViewerWindow(std::move(diagnosticVolume), std::move(profileSelection), parent);
 #else
     Q_UNUSED(diagnosticVolume);
     Q_UNUSED(title);
@@ -40,6 +42,7 @@ QWidget* WidgetsAdvancedViewerLauncher::showThreeDVolume(
     Q_UNUSED(parent);
     return nullptr;
 #endif
+
     viewer->setAttribute(Qt::WA_DeleteOnClose);
     viewer->setWindowTitle(title);
     viewer->show();
