@@ -7,9 +7,7 @@ void ViewportSession::clear()
     currentImageIndex = -1;
     currentWindowLevel = 0;
     currentWindowWidth = 100;
-    currentPresetIndex = 0;
-    currentAutoWindowPresetIndex = 0;
+    currentPreset = ViewportWindowPreset::Custom;
     windowStateInitialized = false;
-    toolIndex = 0;
     cinePlaying = false;
 }

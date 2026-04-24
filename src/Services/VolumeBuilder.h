@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Errors/AppResult.h"
 #include "Utilities/VolumeValidationSettings.h"
 #include "Model/IVolumeData.h"
 
@@ -16,7 +17,7 @@ class VolumeBuilder
 public:
     explicit VolumeBuilder(VolumeValidationSettings validationSettings = {});
 
-    std::shared_ptr<IVolumeData> buildFromDiagnosticSeries(const Series& diagnosticSeries) const;
+    AppResult<std::shared_ptr<IVolumeData>> buildFromDiagnosticSeries(const Series& diagnosticSeries) const;
 
 private:
     struct SliceBasis

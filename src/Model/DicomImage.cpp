@@ -7,7 +7,7 @@ const QPixmap& DicomImage::pixmap() const
 
 bool DicomImage::isValid() const
 {
-    return !m_pixmap.isNull() && m_width > 0 && m_height > 0;
+    return m_width > 0 && m_height > 0 && (!m_pixmap.isNull() || !m_rawPixels.empty());
 }
 
 const QString& DicomImage::filePath() const
@@ -37,7 +37,7 @@ int DicomImage::height() const
 
 bool DicomImage::hasRawPixels() const
 {
-    return !m_rawPixels.isEmpty() && m_width > 0 && m_height > 0;
+    return !m_rawPixels.empty() && m_width > 0 && m_height > 0;
 }
 
 bool DicomImage::isMonochrome() const
@@ -125,6 +125,11 @@ int DicomImage::rawPixelValueAt(int x, int y) const
     return m_rawPixels[(y * m_width) + x];
 }
 
+std::size_t DicomImage::rawPixelByteCount() const
+{
+    return m_rawPixels.size() * sizeof(std::int16_t);
+}
+
 void DicomImage::setPixmap(const QPixmap& pixmap)
 {
     m_pixmap = pixmap;
@@ -151,9 +156,15 @@ void DicomImage::setDimensions(int width, int height)
     m_height = height;
 }
 
-void DicomImage::setRawPixels(const QVector<int>& rawPixels)
+void DicomImage::setRawPixels(const std::vector<int16_t>& rawPixels)
 {
     m_rawPixels = rawPixels;
+}
+
+void DicomImage::clearRawPixels()
+{
+    m_rawPixels.clear();
+    m_rawPixels.shrink_to_fit();
 }
 
 void DicomImage::setMonochrome(bool isMonochrome)

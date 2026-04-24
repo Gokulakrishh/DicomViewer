@@ -138,40 +138,50 @@ Later add:
 
 This avoids forcing one rendering mode to solve every problem.
 
-## Current Integration Constraint
+## Current Repository Status
 
-The repository now contains the first VTK volume-viewer scaffolding:
-- `src/AdvancedViewer/VtkVolumeAdapter.*`
-- `src/AdvancedViewer/VtkVolumeViewerWindow.*`
+The repository now contains a working Qt6-compatible VTK path under:
 
-Important constraint on this machine:
-- the available VTK with `GUISupportQt` is built against `Qt5`
-- the application is built with `Qt6`
+- `src/VTK/Adapters`
+- `src/VTK/Camera`
+- `src/VTK/Presets`
+- `src/VTK/Viewer`
 
-Consequence:
-- VTK integration is gated behind `DICOMVIEWER_ENABLE_VTK`
-- the default build keeps the QML viewer active until a Qt6-compatible VTK build is available
+Important current status:
 
-This is intentional. Mixing `Qt5` and `Qt6` in the same viewer process is the wrong foundation.
+- VTK is now the default build path
+- `build/` is the canonical local build directory for the VTK build
+- the non-VTK build still works
+- the VTK build also works locally with the Qt6-compatible VTK installation
+- the old QML 3D viewer remains only as a temporary fallback path when VTK is not enabled
+
+Current backend split:
+
+- shared/common procedures remain in `src/Services`
+- VTK-specific adapters, presets, camera logic, and viewer windows remain in `src/VTK`
+- `src/AdvancedViewer` stays as the app-facing launcher/orchestration layer
+
+This is the intended long-term direction.
 
 ## Recommended Next Migration Steps
 
 ### Phase 1
 
-- keep QML 3D temporary
-- keep backend pipeline work renderer-agnostic
-- land VTK viewer scaffolding behind a build flag
+- keep the backend pipeline renderer-agnostic
+- keep VTK as the primary 3D direction
+- treat the old QML 3D viewer as legacy fallback, not the strategic renderer
 
 ### Phase 2
 
-When a Qt6-compatible VTK build is available:
-- enable `DICOMVIEWER_ENABLE_VTK`
-- route `View -> 3D` to `VTKVolumeViewerWindow`
-- validate direct volume rendering on real CT datasets
+- continue improving `VTKVolumeViewerWindow`
+- move preset-specific preprocessing into shared services
+- improve body/background suppression and transfer-function tuning
+- stabilize the volume-rendering UX before starting VTK MPR
 
 ### Phase 3
 
 Add:
+
 - `VtkMeshAdapter`
 - `VTKSurfaceViewerWindow`
 
@@ -180,9 +190,22 @@ This preserves the current segmentation/surface pipeline while allowing VTK to r
 ### Phase 4
 
 Introduce future ITK-backed algorithms behind existing interfaces:
+
 - segmentation strategies
 - morphology refinement
 - organ-label generation
+- label-volume workflows
+
+### Phase 5
+
+Extend the structured error architecture into the full VTK/ITK path:
+
+- `AppError`
+- `AppResult<T>`
+- `IErrorPresenter`
+- `IErrorAudit`
+
+Do not let VTK/ITK layers open dialogs directly.
 
 ## SOLID Guidance
 

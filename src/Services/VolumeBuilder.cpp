@@ -1,5 +1,6 @@
 #include "VolumeBuilder.h"
 
+#include "Errors/AppError.h"
 #include "Model/DicomImage.h"
 #include "Model/DicomParameters.h"
 #include "Model/VolumeData.h"
@@ -13,6 +14,19 @@
 #include <limits>
 #include <stdexcept>
 #include <vector>
+
+namespace
+{
+AppError makeVolumeBuildError(ErrorCode code, const QString& technicalMessage, const QString& userMessage)
+{
+    return AppError{
+        code,
+        ErrorSeverity::Recoverable,
+        "Volume Builder",
+        technicalMessage,
+        userMessage};
+}
+}
 
 VolumeBuilder::VolumeBuilder(VolumeValidationSettings validationSettings)
     : m_validationSettings(std::move(validationSettings))
@@ -45,7 +59,10 @@ VolumeBuilder::VolumeInput VolumeBuilder::collectVolumeInput(const Series& serie
         if (!imagePtr || !imagePtr->hasRawPixels() ||
             imagePtr->width() != input.width || imagePtr->height() != input.height)
         {
-            throw std::runtime_error("Series cannot be converted into a consistent volume");
+            throw makeVolumeBuildError(
+                ErrorCode::VolumeBuildInconsistentGeometry,
+                "Series cannot be converted into a consistent volume",
+                "The selected series cannot be converted into a consistent diagnostic volume.");
         }
 
         input.orderedImages.push_back(imagePtr.get());
@@ -140,7 +157,10 @@ void VolumeBuilder::validateImageOrientation(
         std::abs(dotProduct(imageBasis.column, referenceBasis.column)) < (1.0 - settings.orientationAlignmentTolerance) ||
         std::abs(dotProduct(imageBasis.normal, referenceBasis.normal)) < (1.0 - settings.orientationAlignmentTolerance))
     {
-        throw std::runtime_error("Series has inconsistent slice orientation");
+        throw makeVolumeBuildError(
+            ErrorCode::VolumeBuildInconsistentOrientation,
+            "Series has inconsistent slice orientation",
+            "The selected series has inconsistent slice orientation.");
     }
 }
 
@@ -153,7 +173,10 @@ void VolumeBuilder::validateImageSpacing(
     const bool imageHasPixelSpacing = image.hasPixelSpacing();
     if (referenceHasPixelSpacing != imageHasPixelSpacing)
     {
-        throw std::runtime_error("Series has inconsistent pixel spacing availability");
+        throw makeVolumeBuildError(
+            ErrorCode::VolumeBuildInconsistentPixelSpacing,
+            "Series has inconsistent pixel spacing availability",
+            "The selected series has inconsistent pixel spacing information.");
     }
 
     if (!referenceHasPixelSpacing)
@@ -164,7 +187,10 @@ void VolumeBuilder::validateImageSpacing(
     if (std::abs(image.pixelSpacingX() - referenceImage.pixelSpacingX()) > settings.spacingTolerance ||
         std::abs(image.pixelSpacingY() - referenceImage.pixelSpacingY()) > settings.spacingTolerance)
     {
-        throw std::runtime_error("Series has inconsistent in-plane pixel spacing");
+        throw makeVolumeBuildError(
+            ErrorCode::VolumeBuildInconsistentPixelSpacing,
+            "Series has inconsistent in-plane pixel spacing",
+            "The selected series has inconsistent in-plane pixel spacing.");
     }
 }
 
@@ -201,7 +227,10 @@ void VolumeBuilder::validateSliceSpacing(
         const double delta = std::abs(currentCoordinate - previousCoordinate);
         if (delta <= settings.spacingTolerance)
         {
-            throw std::runtime_error("Series has duplicate or overlapping slice positions");
+            throw makeVolumeBuildError(
+                ErrorCode::VolumeBuildDuplicateSlicePosition,
+                "Series has duplicate or overlapping slice positions",
+                "The selected series contains duplicate or overlapping slice positions.");
         }
 
         if (expectedSpacing < 0.0)
@@ -213,7 +242,10 @@ void VolumeBuilder::validateSliceSpacing(
         if (settings.validateUniformSliceSpacing &&
             std::abs(delta - expectedSpacing) > settings.spacingTolerance)
         {
-            throw std::runtime_error("Series has inconsistent slice spacing");
+            throw makeVolumeBuildError(
+                ErrorCode::VolumeBuildInconsistentSliceSpacing,
+                "Series has inconsistent slice spacing",
+                "The selected series has inconsistent slice spacing.");
         }
     }
 }
@@ -225,7 +257,10 @@ void VolumeBuilder::validateSliceGeometry(
 {
     if (!input.firstImage)
     {
-        throw std::runtime_error("Series is missing a reference image for volume reconstruction");
+        throw makeVolumeBuildError(
+            ErrorCode::VolumeBuildInvalidInput,
+            "Series is missing a reference image for volume reconstruction",
+            "The selected series is missing a valid reference image.");
     }
 
     const DicomImage& referenceImage = *input.firstImage;
@@ -320,53 +355,70 @@ std::vector<int16_t> VolumeBuilder::buildVoxelBuffer(const VolumeInput& input)
     return voxels;
 }
 
-std::shared_ptr<IVolumeData> VolumeBuilder::buildFromDiagnosticSeries(const Series& diagnosticSeries) const
+AppResult<std::shared_ptr<IVolumeData>> VolumeBuilder::buildFromDiagnosticSeries(const Series& diagnosticSeries) const
 {
-    VolumeInput input = collectVolumeInput(diagnosticSeries);
-    if (!input.firstImage)
+    try
     {
-        return {};
-    }
+        VolumeInput input = collectVolumeInput(diagnosticSeries);
+        if (!input.firstImage)
+        {
+            return makeVolumeBuildError(
+                ErrorCode::VolumeBuildInvalidInput,
+                "Diagnostic series does not contain a valid first image",
+                "The selected series does not contain enough diagnostic image data to build a volume.");
+        }
 
-    const SliceBasis basis = deriveSliceBasis(*input.firstImage);
-    sortSlicesByGeometry(input.orderedImages, basis);
+        const SliceBasis basis = deriveSliceBasis(*input.firstImage);
+        sortSlicesByGeometry(input.orderedImages, basis);
 
-    const DicomImage* firstOrderedImage = input.orderedImages.empty() ? nullptr : input.orderedImages.front();
-    const DicomImage* lastOrderedImage = input.orderedImages.empty() ? nullptr : input.orderedImages.back();
-    qDebug().nospace()
-        << "VolumeBuilder ordered input:"
-        << " count=" << input.orderedImages.size()
-        << " dims=(" << input.width << ", " << input.height << ", " << input.depth << ")"
-        << " basis.row=(" << basis.row[0] << ", " << basis.row[1] << ", " << basis.row[2] << ")"
-        << " basis.column=(" << basis.column[0] << ", " << basis.column[1] << ", " << basis.column[2] << ")"
-        << " basis.normal=(" << basis.normal[0] << ", " << basis.normal[1] << ", " << basis.normal[2] << ")";
-
-    if (firstOrderedImage && lastOrderedImage &&
-        firstOrderedImage->hasImagePositionPatient() &&
-        lastOrderedImage->hasImagePositionPatient())
-    {
-        const auto& firstPosition = firstOrderedImage->imagePositionPatient();
-        const auto& lastPosition = lastOrderedImage->imagePositionPatient();
+        const DicomImage* firstOrderedImage = input.orderedImages.empty() ? nullptr : input.orderedImages.front();
+        const DicomImage* lastOrderedImage = input.orderedImages.empty() ? nullptr : input.orderedImages.back();
         qDebug().nospace()
-            << "VolumeBuilder ordered positions:"
-            << " first=(" << firstPosition[0] << ", " << firstPosition[1] << ", " << firstPosition[2] << ")"
-            << " last=(" << lastPosition[0] << ", " << lastPosition[1] << ", " << lastPosition[2] << ")"
-            << " firstCoord=" << sliceCoordinate(*firstOrderedImage, basis)
-            << " lastCoord=" << sliceCoordinate(*lastOrderedImage, basis);
+            << "VolumeBuilder ordered input:"
+            << " count=" << input.orderedImages.size()
+            << " dims=(" << input.width << ", " << input.height << ", " << input.depth << ")"
+            << " basis.row=(" << basis.row[0] << ", " << basis.row[1] << ", " << basis.row[2] << ")"
+            << " basis.column=(" << basis.column[0] << ", " << basis.column[1] << ", " << basis.column[2] << ")"
+            << " basis.normal=(" << basis.normal[0] << ", " << basis.normal[1] << ", " << basis.normal[2] << ")";
+
+        if (firstOrderedImage && lastOrderedImage &&
+            firstOrderedImage->hasImagePositionPatient() &&
+            lastOrderedImage->hasImagePositionPatient())
+        {
+            const auto& firstPosition = firstOrderedImage->imagePositionPatient();
+            const auto& lastPosition = lastOrderedImage->imagePositionPatient();
+            qDebug().nospace()
+                << "VolumeBuilder ordered positions:"
+                << " first=(" << firstPosition[0] << ", " << firstPosition[1] << ", " << firstPosition[2] << ")"
+                << " last=(" << lastPosition[0] << ", " << lastPosition[1] << ", " << lastPosition[2] << ")"
+                << " firstCoord=" << sliceCoordinate(*firstOrderedImage, basis)
+                << " lastCoord=" << sliceCoordinate(*lastOrderedImage, basis);
+        }
+
+        validateSliceGeometry(input, basis, m_validationSettings);
+        VolumeGeometry geometry = buildGeometry(input, basis);
+        qDebug().nospace()
+            << "VolumeBuilder output geometry:"
+            << " dims=(" << geometry.dimensions.x << ", " << geometry.dimensions.y << ", " << geometry.dimensions.z << ")"
+            << " spacing=(" << geometry.spacing.x << ", " << geometry.spacing.y << ", " << geometry.spacing.z << ")"
+            << " origin=(" << geometry.origin.x << ", " << geometry.origin.y << ", " << geometry.origin.z << ")"
+            << " direction=["
+            << geometry.direction[0] << ", " << geometry.direction[1] << ", " << geometry.direction[2] << "; "
+            << geometry.direction[3] << ", " << geometry.direction[4] << ", " << geometry.direction[5] << "; "
+            << geometry.direction[6] << ", " << geometry.direction[7] << ", " << geometry.direction[8] << "]";
+        std::vector<int16_t> voxels = buildVoxelBuffer(input);
+
+        return std::make_shared<VolumeData<int16_t>>(std::move(geometry), std::move(voxels));
     }
-
-    validateSliceGeometry(input, basis, m_validationSettings);
-    VolumeGeometry geometry = buildGeometry(input, basis);
-    qDebug().nospace()
-        << "VolumeBuilder output geometry:"
-        << " dims=(" << geometry.dimensions.x << ", " << geometry.dimensions.y << ", " << geometry.dimensions.z << ")"
-        << " spacing=(" << geometry.spacing.x << ", " << geometry.spacing.y << ", " << geometry.spacing.z << ")"
-        << " origin=(" << geometry.origin.x << ", " << geometry.origin.y << ", " << geometry.origin.z << ")"
-        << " direction=["
-        << geometry.direction[0] << ", " << geometry.direction[1] << ", " << geometry.direction[2] << "; "
-        << geometry.direction[3] << ", " << geometry.direction[4] << ", " << geometry.direction[5] << "; "
-        << geometry.direction[6] << ", " << geometry.direction[7] << ", " << geometry.direction[8] << "]";
-    std::vector<int16_t> voxels = buildVoxelBuffer(input);
-
-    return std::make_shared<VolumeData<int16_t>>(std::move(geometry), std::move(voxels));
+    catch (const AppError& error)
+    {
+        return error;
+    }
+    catch (const std::exception& exception)
+    {
+        return makeVolumeBuildError(
+            ErrorCode::VolumeBuildInvalidInput,
+            exception.what(),
+            "Failed to build a diagnostic volume from the selected series.");
+    }
 }

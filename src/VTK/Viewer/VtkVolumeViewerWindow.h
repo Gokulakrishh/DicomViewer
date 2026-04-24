@@ -43,6 +43,8 @@ private:
 
 private:
     std::shared_ptr<IVolumeData> m_diagnosticVolume;
+    std::shared_ptr<IVolumeData> m_baseVolumeSource;
+    std::shared_ptr<IVolumeData> m_boneFocusedVolumeSource;
     ThreeDProfileSelection m_autoProfileSelection;
     QComboBox* m_profileComboBox{nullptr};
     QSlider* m_zoomSlider{nullptr};

@@ -19,7 +19,14 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-option(DICOMVIEWER_ENABLE_VTK "Enable VTK-based 3D volume rendering integration" OFF)
+option(DICOMVIEWER_ENABLE_VTK "Enable VTK-based 3D volume rendering integration" ON)
+option(DICOMVIEWER_ENABLE_MEMORY_LOGGING "Enable memory management debug logging" OFF)
+
+if(DICOMVIEWER_ENABLE_MEMORY_LOGGING)
+    add_compile_definitions(DICOMVIEWER_ENABLE_MEMORY_LOGGING=1)
+else()
+    add_compile_definitions(DICOMVIEWER_ENABLE_MEMORY_LOGGING=0)
+endif()
 
 # ----------------------------
 # Find dependencies
@@ -132,8 +139,14 @@ if(DICOMVIEWER_ENABLE_VTK)
     find_package(VTK REQUIRED COMPONENTS
         CommonCore
         CommonDataModel
+        FiltersModeling
+        FiltersSources
+        InteractionWidgets
         GUISupportQt
+        IOImage
+        InteractionImage
         InteractionStyle
+        RenderingImage
         RenderingCore
         RenderingOpenGL2
         RenderingVolumeOpenGL2
@@ -142,6 +155,22 @@ if(DICOMVIEWER_ENABLE_VTK)
 
     list(APPEND APP_VTK_VIEWER_SOURCES
         src/VTK/Adapters/VtkVolumeAdapter.cpp
+        src/VTK/MainView/VtkSliceSceneAdapter.cpp
+        src/VTK/MainView/VtkDiagnosticSliceView.cpp
+        src/ViewerTools/CrosshairTool.cpp
+        src/ViewerTools/WindowLevelTool.cpp
+        src/ViewerTools/ZoomTool.cpp
+        src/VTK/MPR/Adapters/VtkMprSceneAdapter.cpp
+        src/VTK/MPR/Adapters/MprToolAdapter.cpp
+        src/VTK/MPR/Controllers/InteractionRouter.cpp
+        src/VTK/MPR/Controllers/MprController.cpp
+        src/VTK/MPR/Controllers/ToolController.cpp
+        src/VTK/MPR/State/MprScene.cpp
+        src/VTK/MPR/Sync/MprSynchronizationService.cpp
+        src/VTK/MPR/View/VtkMprView.cpp
+        src/VTK/MPR/View/VtkSliceMprPaneView.cpp
+        src/VTK/MPR/View/VtkThreeDReferencePaneView.cpp
+        src/VTK/MPR/Window/VtkMprViewerWindow.cpp
         src/VTK/Camera/VtkVolumeCameraController.cpp
         src/VTK/Presets/VtkVolumeRenderPreset.cpp
         src/VTK/Presets/VtkVolumePresetLibrary.cpp
@@ -150,6 +179,27 @@ if(DICOMVIEWER_ENABLE_VTK)
 
     list(APPEND APP_VTK_VIEWER_HEADERS
         src/VTK/Adapters/VtkVolumeAdapter.h
+        src/VTK/MainView/VtkSliceSceneAdapter.h
+        src/VTK/MainView/VtkDiagnosticSliceView.h
+        src/ViewerTools/CrosshairTool.h
+        src/ViewerTools/IViewerTool.h
+        src/ViewerTools/IViewerToolTarget.h
+        src/ViewerTools/ViewerInputEvent.h
+        src/ViewerTools/WindowLevelTool.h
+        src/ViewerTools/ZoomTool.h
+        src/VTK/MPR/Adapters/MprToolAdapter.h
+        src/VTK/MPR/Adapters/VtkMprSceneAdapter.h
+        src/VTK/MPR/Controllers/InteractionRouter.h
+        src/VTK/MPR/Controllers/MprController.h
+        src/VTK/MPR/Controllers/ToolController.h
+        src/VTK/MPR/MprTypes.h
+        src/VTK/MPR/State/MprScene.h
+        src/VTK/MPR/Sync/MprSynchronizationService.h
+        src/VTK/MPR/View/IMprPaneView.h
+        src/VTK/MPR/View/VtkMprView.h
+        src/VTK/MPR/View/VtkSliceMprPaneView.h
+        src/VTK/MPR/View/VtkThreeDReferencePaneView.h
+        src/VTK/MPR/Window/VtkMprViewerWindow.h
         src/VTK/Camera/VtkVolumeCameraController.h
         src/VTK/Presets/VtkVolumeRenderPreset.h
         src/VTK/Presets/VtkVolumePresetLibrary.h
@@ -165,27 +215,26 @@ set(SRC_FILES
     src/resources/styles.qrc
     src/AI/GeminiAiAssistantService.cpp
     src/AI/QtHttpAiServerClient.cpp
-    src/AdvancedViewer/MprViewerWindow.cpp
     src/AdvancedViewer/WidgetsAdvancedViewerLauncher.cpp
+    src/Errors/QtErrorDialogPresenter.cpp
     src/Utilities/AppStyle.cpp
     src/Utilities/AppDialogBase.cpp
     src/Utilities/AiApiKeyDialog.cpp
+    src/Utilities/MemoryManagementDebug.cpp
     src/Utilities/LoadingDialog.cpp
     src/Utilities/QSettingsAppConfigService.cpp
     src/Utilities/WarningDialog.cpp
     src/FileHandling/GDCMFileHandling.cpp
     src/DicomViewerWindow/DicomMainWindow.cpp
-    src/DicomViewerWindow/DicomGraphicsView.cpp
+    src/DicomViewerWindow/DicomTreeController.cpp
+    src/DicomViewerWindow/DicomTreePanel.cpp
     src/DicomViewerWindow/DicomMainWindow.ui
     src/Model/DicomImage.cpp
-    src/DicomViewerWindow/MeasurementController.cpp
     src/DicomViewerWindow/DicomViewportController.cpp
-    src/DicomViewerWindow/DicomRenderService.cpp
     src/DicomViewerWindow/ViewportSession.cpp
+    src/Services/AdvancedSeriesVolumeService.cpp
     src/Services/VolumeBuilder.cpp
     src/Services/VolumeResampleService.cpp
-    src/Services/MprRenderService.cpp
-    src/Services/WindowingAnalysisService.cpp
     src/Utilities/WarningDialogService.cpp
     src/Database/PostgreConnection.cpp
     src/Database/PostgreService.cpp
@@ -202,13 +251,23 @@ set(HEADER_FILES
     src/AI/IAiServerClient.h
     src/AI/QtHttpAiServerClient.h
     src/AdvancedViewer/IAdvancedViewerLauncher.h
-    src/AdvancedViewer/MprViewerWindow.h
     src/AdvancedViewer/WidgetsAdvancedViewerLauncher.h
+    src/Errors/AppError.h
+    src/Errors/AppResult.h
+    src/Errors/ErrorCode.h
+    src/Errors/ErrorSeverity.h
+    src/Errors/IErrorAudit.h
+    src/Errors/IErrorPresenter.h
+    src/Errors/NullErrorAudit.h
+    src/Errors/QtErrorDialogPresenter.h
     src/Utilities/AiServiceSettings.h
     src/Utilities/AppStyle.h
     src/Utilities/AppDialogBase.h
     src/Utilities/AiApiKeyDialog.h
+    src/Utilities/AiMessageFormatter.h
     src/Utilities/DatabaseSettings.h
+    src/Utilities/DiagnosticImageRenderer.h
+    src/Utilities/MemoryManagementDebug.h
     src/Utilities/Math3D.h
     src/Utilities/IAppConfigService.h
     src/Utilities/IWarningDialogService.h
@@ -225,15 +284,14 @@ set(HEADER_FILES
     src/FileHandling/FileHandling.h
     src/FileHandling/GDCMFileHandling.h
     src/DicomViewerWindow/DicomMainWindow.h
-    src/DicomViewerWindow/DicomGraphicsView.h
-    src/DicomViewerWindow/MeasurementController.h
+    src/DicomViewerWindow/DicomTreeController.h
+    src/DicomViewerWindow/DicomTreeItemRoles.h
+    src/DicomViewerWindow/DicomTreePanel.h
     src/DicomViewerWindow/DicomViewportController.h
-    src/DicomViewerWindow/DicomRenderService.h
     src/DicomViewerWindow/ViewportSession.h
+    src/Services/AdvancedSeriesVolumeService.h
     src/Services/VolumeBuilder.h
     src/Services/VolumeResampleService.h
-    src/Services/MprRenderService.h
-    src/Services/WindowingAnalysisService.h
     src/Utilities/WarningDialog.h
     src/Utilities/WarningDialogService.h
     src/Database/DatabaseConnection.h
@@ -370,7 +428,6 @@ target_link_libraries(ThreeDPipelineHarness
 add_executable(ThreeDSeriesCli
     tests/ThreeDSeriesCli.cpp
     src/FileHandling/GDCMFileHandling.cpp
-    src/DicomViewerWindow/DicomRenderService.cpp
     src/Model/DicomImage.cpp
     ${APP_3D_MODEL_SOURCES}
     src/Services/VolumeBuilder.cpp

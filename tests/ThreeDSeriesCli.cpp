@@ -157,7 +157,13 @@ int main(int argc, char* argv[])
 
         SeriesDataLoadService seriesDataLoadService(fileHandling);
         const Series* lightweightSeries = selection->series;
-        const Series diagnosticSeries = seriesDataLoadService.loadDiagnosticSeries(*lightweightSeries);
+        const auto diagnosticSeriesResult = seriesDataLoadService.loadDiagnosticSeries(*lightweightSeries);
+        if (!diagnosticSeriesResult)
+        {
+            qCritical() << "Failed to reload diagnostic series:" << diagnosticSeriesResult.error().technicalMessage;
+            return 1;
+        }
+        const Series& diagnosticSeries = diagnosticSeriesResult.value();
 
         qInfo() << "Selected patient:" << (selection->patient ? selection->patient->patientName() : QString{});
         qInfo() << "Selected study:" << (selection->study ? selection->study->studyDescription() : QString{});
@@ -167,7 +173,7 @@ int main(int argc, char* argv[])
         qInfo() << "Series image count:" << diagnosticSeries.imageCount();
 
         ThreeDSeriesBuildService buildService;
-        ThreeDimensionalPipelineResult result;
+        AppResult<ThreeDimensionalPipelineResult> result = AppError{};
 
         if (profileName == "bone")
         {
@@ -185,17 +191,23 @@ int main(int argc, char* argv[])
             return 1;
         }
 
-        if (!result.isValid())
+        if (!result)
+        {
+            qCritical() << "3D pipeline failed:" << result.error().technicalMessage;
+            return 1;
+        }
+
+        if (!result.value().isValid())
         {
             qCritical() << "3D pipeline returned an invalid result";
             return 1;
         }
 
         qInfo() << "3D pipeline completed";
-        qInfo() << "Profile:" << QString::fromStdString(result.diagnostics.profileName);
-        qInfo() << "Foreground voxels:" << result.diagnostics.foregroundVoxelCount;
-        qInfo() << "Mesh vertices:" << static_cast<qulonglong>(result.diagnostics.meshVertexCount);
-        qInfo() << "Mesh triangles:" << static_cast<qulonglong>(result.diagnostics.meshTriangleCount);
+        qInfo() << "Profile:" << QString::fromStdString(result.value().diagnostics.profileName);
+        qInfo() << "Foreground voxels:" << result.value().diagnostics.foregroundVoxelCount;
+        qInfo() << "Mesh vertices:" << static_cast<qulonglong>(result.value().diagnostics.meshVertexCount);
+        qInfo() << "Mesh triangles:" << static_cast<qulonglong>(result.value().diagnostics.meshTriangleCount);
         return 0;
     }
     catch (const std::exception& exception)

@@ -1,16 +1,16 @@
 # DicomViewer
 
-`DicomViewer` is a `Qt 6` / `C++20` desktop application for browsing and viewing DICOM studies with PostgreSQL-backed hierarchy indexing, MPR, measurement tools, and an optional AI assistant. The current codebase is a professional-grade desktop viewer foundation aimed at scaling to larger datasets and richer clinical-style workflows.
+`DicomViewer` is a `Qt 6` / `C++20` desktop application for browsing and viewing DICOM studies with PostgreSQL-backed hierarchy indexing, VTK-based MPR, measurement tools, and an optional AI assistant. The current codebase is a professional-grade desktop viewer foundation aimed at scaling to larger datasets and richer clinical-style workflows.
 
 ## Features
 
 - DICOM import with `GDCM`
 - PostgreSQL-backed `Patient -> Study -> Series -> DicomImage` hierarchy
-- lazy tree loading for large datasets
+- Incremental Hierarchy Loading for large datasets
 - one cached preview image per series
 - raw grayscale rendering with true `WL/WW`
 - slice scrolling, cine playback, and overlay measurement tools
-- MPR viewer with synchronized axial / coronal / sagittal panes
+- VTK MPR viewer with synchronized axial / coronal / sagittal panes and a 3D reference pane
 - optional AI Q&A dock with user-provided API key
 
 ## Screenshots
@@ -93,6 +93,17 @@ cmake -S . -B build -DCMAKE_PREFIX_PATH=/path/to/Qt/6.x.x
 cmake --build build -j4
 ```
 
+Notes:
+
+- `VTK` is now the default build path
+- `build/` is the official local build directory
+- if you explicitly need a non-VTK build, configure with:
+
+```bash
+cmake -S . -B build-novtk -DCMAKE_PREFIX_PATH=/path/to/Qt/6.x.x -DDICOMVIEWER_ENABLE_VTK=OFF
+cmake --build build-novtk -j4
+```
+
 ### 4. Run
 
 On macOS:
@@ -112,7 +123,7 @@ After launch:
 2. Let the app import the folder into PostgreSQL.
 3. Browse patients, studies, and series from the left tree.
 4. Select a series to load raw image data into the main viewer.
-5. Use `Open MPR` for multi-planar reconstruction on multi-slice series.
+5. Use `Open MPR` for VTK-based multi-planar reconstruction on multi-slice series.
 
 
 ## Awaiting Features

@@ -1,10 +1,6 @@
 <RCC>
     <qresource prefix="/">
         <file alias="styles/app.qss">styles/app.qss</file>
-        <file alias="icons/tool_pan.svg">icons/tool_pan.svg</file>
-        <file alias="icons/tool_distance.svg">icons/tool_distance.svg</file>
-        <file alias="icons/tool_probe.svg">icons/tool_probe.svg</file>
-        <file alias="icons/tool_angle.svg">icons/tool_angle.svg</file>
         <file alias="icons/cine_play.svg">icons/cine_play.svg</file>
         <file alias="icons/cine_pause.svg">icons/cine_pause.svg</file>
         <file alias="qml/ThreeDViewer.qml">qml/ThreeDViewer.qml</file>

@@ -1,10 +1,13 @@
 #include "VTK/Adapters/VtkVolumeAdapter.h"
 
 #include "Model/IVolumeData.h"
+#include "Model/VolumeData.h"
 
 #include <vtkImageData.h>
 #include <vtkMatrix3x3.h>
 #include <vtkNew.h>
+#include <vtkPointData.h>
+#include <vtkShortArray.h>
 
 namespace
 {
@@ -33,10 +36,35 @@ vtkSmartPointer<vtkImageData> createEmptyImageData(const VolumeGeometry& geometr
     imageData->AllocateScalars(VTK_SHORT, 1);
     return imageData;
 }
+
+vtkSmartPointer<vtkImageData> importImageData(const VolumeData<int16_t>& diagnosticVolume)
+{
+    const VolumeGeometry& geometry = diagnosticVolume.geometry();
+    vtkSmartPointer<vtkImageData> imageData = vtkSmartPointer<vtkImageData>::New();
+    imageData->SetDimensions(geometry.dimensions.x, geometry.dimensions.y, geometry.dimensions.z);
+    imageData->SetSpacing(geometry.spacing.x, geometry.spacing.y, geometry.spacing.z);
+    imageData->SetOrigin(geometry.origin.x, geometry.origin.y, geometry.origin.z);
+    imageData->SetDirectionMatrix(createDirectionMatrix(geometry));
+
+    vtkNew<vtkShortArray> scalars;
+    scalars->SetNumberOfComponents(1);
+    scalars->SetArray(
+        const_cast<short*>(diagnosticVolume.voxels().data()),
+        static_cast<vtkIdType>(diagnosticVolume.voxels().size()),
+        1);
+    imageData->GetPointData()->SetScalars(scalars);
+    imageData->Modified();
+    return imageData;
+}
 }
 
 vtkSmartPointer<vtkImageData> VtkVolumeAdapter::createImageData(const IVolumeData& diagnosticVolume)
 {
+    if (const auto* typedVolume = dynamic_cast<const VolumeData<int16_t>*>(&diagnosticVolume))
+    {
+        return importImageData(*typedVolume);
+    }
+
     const VolumeGeometry& geometry = diagnosticVolume.geometry();
     vtkSmartPointer<vtkImageData> imageData = createEmptyImageData(geometry);
 

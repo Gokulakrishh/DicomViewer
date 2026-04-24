@@ -5,6 +5,15 @@
 class DicomImage;
 class Series;
 
+enum class ViewportWindowPreset
+{
+    Custom = 0,
+    Brain,
+    SoftTissue,
+    Bone,
+    Lung
+};
+
 class ViewportSession
 {
 public:
@@ -15,10 +24,8 @@ public:
     int currentImageIndex{-1};
     int currentWindowLevel{0};
     int currentWindowWidth{100};
-    int currentPresetIndex{0};
-    int currentAutoWindowPresetIndex{0};
+    ViewportWindowPreset currentPreset{ViewportWindowPreset::Custom};
     bool windowStateInitialized{false};
     int seriesGeneration{0};
-    int toolIndex{0};
     bool cinePlaying{false};
 };

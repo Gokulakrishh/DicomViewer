@@ -81,8 +81,8 @@ Series buildSyntheticSphereSeries()
         image->setImageOrientationPatient({1.0, 0.0, 0.0, 0.0, 1.0, 0.0});
         image->setImagePositionPatient({-32.0, -32.0, -32.0 + static_cast<double>(z)});
 
-        QVector<int> rawPixels;
-        rawPixels.resize(width * height);
+        std::vector<int16_t> rawPixels;
+        rawPixels.resize(static_cast<std::size_t>(width * height));
 
         int flatIndex = 0;
         for (int y = 0; y < height; ++y)
@@ -93,7 +93,7 @@ Series buildSyntheticSphereSeries()
                 const double dy = static_cast<double>(y) - centerY;
                 const double dz = static_cast<double>(z) - centerZ;
                 const double distance = std::sqrt((dx * dx) + (dy * dy) + (dz * dz));
-                rawPixels[flatIndex++] = distance <= radius ? 1000 : 0;
+                rawPixels[static_cast<std::size_t>(flatIndex++)] = static_cast<int16_t>(distance <= radius ? 1000 : 0);
             }
         }
 
@@ -140,10 +140,15 @@ int main(int argc, char* argv[])
 
         const Series syntheticSeries = buildSyntheticSphereSeries();
         ThreeDSeriesBuildService seriesBuildService;
-        const ThreeDimensionalPipelineResult seriesResult =
+        const auto seriesResult =
             seriesBuildService.buildFromDiagnosticSeries(syntheticSeries, profile);
-        qInfo() << "Series entry mesh vertices:" << static_cast<qulonglong>(seriesResult.diagnostics.meshVertexCount);
-        qInfo() << "Series entry mesh triangles:" << static_cast<qulonglong>(seriesResult.diagnostics.meshTriangleCount);
+        if (!seriesResult)
+        {
+            qCritical() << "Series entry pipeline failed:" << seriesResult.error().technicalMessage;
+            return 1;
+        }
+        qInfo() << "Series entry mesh vertices:" << static_cast<qulonglong>(seriesResult.value().diagnostics.meshVertexCount);
+        qInfo() << "Series entry mesh triangles:" << static_cast<qulonglong>(seriesResult.value().diagnostics.meshTriangleCount);
         return 0;
     }
     catch (const std::exception& exception)

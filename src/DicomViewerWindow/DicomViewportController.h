@@ -11,8 +11,6 @@
 class DicomImage;
 class FileHandling;
 class Series;
-class DicomRenderService;
-class WindowingAnalysisService;
 
 class DicomViewportController : public QObject
 {
@@ -28,14 +26,11 @@ public:
         int widthMax{300};
         int level{0};
         int width{100};
-        int presetIndex{0};
-        int autoWindowPresetIndex{0};
+        ViewportWindowPreset preset{ViewportWindowPreset::Custom};
     };
 
     explicit DicomViewportController(
         FileHandling* fileHandling,
-        const DicomRenderService* renderService,
-        const WindowingAnalysisService* windowingAnalysisService,
         QObject* parent = nullptr);
     ~DicomViewportController() override;
 
@@ -63,29 +58,26 @@ public:
     void setWindowWidth(int value);
     int currentWindowLevel() const;
     int currentWindowWidth() const;
-    int currentPresetIndex() const;
-    int currentAutoWindowPresetIndex() const;
+    ViewportWindowPreset currentPreset() const;
     void resetPreset();
-    bool applyPreset(int index);
-    void resetAutoWindowPreset();
-    bool applyAutoWindowPreset(int index);
-    void setToolIndex(int index);
-    int toolIndex() const;
+    bool applyPreset(ViewportWindowPreset preset);
     void setCinePlaying(bool playing);
     bool isCinePlaying() const;
     const ViewportSession& session() const;
+    void suspendRawPixelEviction(bool suspended);
 
 private:
     void cancelPendingPreloads();
     void applyPreloadedSlice(int index, int generation, const std::shared_ptr<DicomImage>& loadedImage);
     void requestSlicePreload(int index);
     void scheduleSlicePreload(bool cinePlaying);
+    void enforceRawPixelCache();
 
 private:
+    static constexpr int kRawPixelCacheRadius = 10;
     FileHandling* m_fileHandling{nullptr};
-    const DicomRenderService* m_renderService{nullptr};
-    const WindowingAnalysisService* m_windowingAnalysisService{nullptr};
     ViewportSession m_session;
     QSet<int> m_pendingPreloadIndices;
     QList<QFutureWatcher<std::shared_ptr<DicomImage>>*> m_preloadWatchers;
+    bool m_rawPixelEvictionSuspended{false};
 };

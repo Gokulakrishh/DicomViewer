@@ -22,12 +22,9 @@
 #include <QRegularExpression>
 #include <QSet>
 #include <QSlider>
-#include <QStandardItem>
-#include <QStandardItemModel>
 #include <QStatusBar>
 #include <QStringList>
 #include <QTextCursor>
-#include <QTreeView>
 #include <QVBoxLayout>
 #include <QWidget>
 #include <QtConcurrent/QtConcurrent>
@@ -38,126 +35,34 @@
 #include "AI/IAiAssistantService.h"
 #include "AI/QtHttpAiServerClient.h"
 #include "Utilities/AiApiKeyDialog.h"
+#include "Utilities/AiMessageFormatter.h"
+#include "Utilities/DiagnosticImageRenderer.h"
 #include "Utilities/IAppConfigService.h"
+#include "Utilities/MemoryManagementDebug.h"
 #include "Utilities/LoadingDialog.h"
 #include "Utilities/IWarningDialogService.h"
 #include "Database/PostgreService.h"
 #include "FileHandling/GDCMFileHandling.h"
 #include "Model/MedicalImage.h"
-#include "Services/SeriesDataLoadService.h"
-#include "Services/VolumeBuilder.h"
+#include "Services/AdvancedSeriesVolumeService.h"
 #include "Services/ThreeDProfiles/ThreeDProfileSelection.h"
-#include "Services/WindowingAnalysisService.h"
 
 namespace
 {
-QString formatAiMessageToHtml(const QString& message)
+QString buildAdvancedViewerTitle(const QString& viewerName, const Series& selectedSeries)
 {
-    QString html = message.trimmed().toHtmlEscaped();
-
-    static const QRegularExpression boldPattern(R"(\*\*(.+?)\*\*)");
-    html.replace(boldPattern, "<strong>\\1</strong>");
-
-    const QStringList lines = html.split('\n');
-    QStringList formattedLines;
-    bool inBulletList = false;
-    bool inNumberedList = false;
-
-    const auto closeLists = [&formattedLines, &inBulletList, &inNumberedList]() {
-        if (inBulletList)
-        {
-            formattedLines.append("</ul>");
-            inBulletList = false;
-        }
-        if (inNumberedList)
-        {
-            formattedLines.append("</ol>");
-            inNumberedList = false;
-        }
-    };
-
-    static const QRegularExpression numberedListPattern(R"(^\d+\.\s+(.+)$)");
-
-    for (const QString& rawLine : lines)
+    QString title = viewerName;
+    if (!selectedSeries.seriesDescription().trimmed().isEmpty())
     {
-        const QString line = rawLine.trimmed();
-        if (line.isEmpty())
-        {
-            closeLists();
-            formattedLines.append("<br/>");
-            continue;
-        }
-
-        if (line.startsWith("### "))
-        {
-            closeLists();
-            formattedLines.append(QString("<div style='font-weight:700; margin:8px 0 4px 0;'>%1</div>").arg(line.mid(4)));
-            continue;
-        }
-
-        if (line.startsWith("## "))
-        {
-            closeLists();
-            formattedLines.append(QString("<div style='font-weight:700; font-size:14px; margin:10px 0 4px 0;'>%1</div>").arg(line.mid(3)));
-            continue;
-        }
-
-        if (line.startsWith("# "))
-        {
-            closeLists();
-            formattedLines.append(QString("<div style='font-weight:700; font-size:15px; margin:12px 0 6px 0;'>%1</div>").arg(line.mid(2)));
-            continue;
-        }
-
-        if (line.startsWith("- ") || line.startsWith("* "))
-        {
-            if (!inBulletList)
-            {
-                closeLists();
-                formattedLines.append("<ul style='margin:4px 0 8px 18px; padding:0;'>");
-                inBulletList = true;
-            }
-            formattedLines.append(QString("<li style='margin:2px 0;'>%1</li>").arg(line.mid(2)));
-            continue;
-        }
-
-        const QRegularExpressionMatch numberedMatch = numberedListPattern.match(line);
-        if (numberedMatch.hasMatch())
-        {
-            if (!inNumberedList)
-            {
-                closeLists();
-                formattedLines.append("<ol style='margin:4px 0 8px 18px; padding:0;'>");
-                inNumberedList = true;
-            }
-            formattedLines.append(QString("<li style='margin:2px 0;'>%1</li>").arg(numberedMatch.captured(1)));
-            continue;
-        }
-
-        closeLists();
-        formattedLines.append(QString("<div>%1</div>").arg(line));
+        title += " - " + selectedSeries.seriesDescription().trimmed();
     }
-
-    closeLists();
-    return formattedLines.join(QString());
+    else if (!selectedSeries.modality().trimmed().isEmpty())
+    {
+        title += " - " + selectedSeries.modality().trimmed();
+    }
+    return title;
 }
 }
-
-constexpr int kFilePathRole = Qt::UserRole + 1;
-constexpr int kSeriesInstanceUidRole = Qt::UserRole + 2;
-constexpr int kPatientNameRole = Qt::UserRole + 3;
-constexpr int kPatientDobRole = Qt::UserRole + 4;
-constexpr int kDoctorNameRole = Qt::UserRole + 5;
-constexpr int kModalityRole = Qt::UserRole + 6;
-constexpr int kStudyDateRole = Qt::UserRole + 7;
-constexpr int kSearchTextRole = Qt::UserRole + 8;
-constexpr int kPatientIdRole = Qt::UserRole + 9;
-constexpr int kStudyInstanceUidRole = Qt::UserRole + 10;
-constexpr int kNodeTypeRole = Qt::UserRole + 11;
-constexpr int kChildrenLoadedRole = Qt::UserRole + 12;
-constexpr auto kNodeTypePatient = "patient";
-constexpr auto kNodeTypeStudy = "study";
-constexpr auto kNodeTypeSeries = "series";
 
 DicomMainWindow::DicomMainWindow(
     std::unique_ptr<IAppConfigService> appConfigService,
@@ -187,117 +92,74 @@ DicomMainWindow::~DicomMainWindow()
 void DicomMainWindow::setUiComponents()
 {
     setupMenuBar();
-    setupImageControlsDock();
+    setupViewerToolbar();
+    setupLeftPanel();
+    setupViewerSurface();
+    setupLegacyViewerControls();
+    setupCoreServices();
+    setupAiDock();
+    setupAsyncInfrastructure();
+    initializeDatabaseAndTree();
+    setupConnections();
+}
 
-    m_leftPanelSplitter = new QSplitter(Qt::Vertical, this);
+void DicomMainWindow::setupLeftPanel()
+{
+    m_treePanel = new DicomTreePanel(this);
+    m_treeController = new DicomTreeController(this);
+    m_ui->horizontalLayout->replaceWidget(m_ui->leftPanelHost, m_treePanel);
+    m_ui->leftPanelHost->deleteLater();
+}
 
-    m_treeView = new QTreeView(m_leftPanelSplitter);
-    m_treeModel = new QStandardItemModel(this);
-    m_treeModel->setHorizontalHeaderLabels({"DICOM Database"});
-    m_treeView->setModel(m_treeModel);
-    m_treeView->setHeaderHidden(false);
-    m_treeView->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    m_treeView->setUniformRowHeights(true);
-    m_previewTitleLabel = new QLabel("Preview", m_leftPanelSplitter);
-    m_previewImageLabel = new QLabel(m_leftPanelSplitter);
-    m_previewImageLabel->setAlignment(Qt::AlignCenter);
-    m_previewImageLabel->setMinimumHeight(120);
-    m_previewImageLabel->setMaximumHeight(180);
-    m_previewImageLabel->setText("No preview");
-    m_previewImageLabel->setFrameShape(QFrame::StyledPanel);
-    m_previewImageLabel->setFrameShadow(QFrame::Sunken);
-
-    auto* previewContainer = new QWidget(m_leftPanelSplitter);
-    auto* previewLayout = new QVBoxLayout(previewContainer);
-    previewLayout->setContentsMargins(4, 4, 4, 4);
-    previewLayout->setSpacing(6);
-    m_searchLineEdit = new QLineEdit(previewContainer);
-    m_searchLineEdit->setPlaceholderText("Filter loaded tree...");
-    m_globalSearchLineEdit = new QLineEdit(previewContainer);
-    m_globalSearchLineEdit->setPlaceholderText("Global DB search by patient, doctor, modality, series...");
-    previewLayout->addWidget(m_searchLineEdit);
-    previewLayout->addWidget(m_globalSearchLineEdit);
-    previewLayout->addWidget(m_previewTitleLabel);
-    previewLayout->addWidget(m_previewImageLabel);
-
-    auto* detailsLayout = new QGridLayout();
-    detailsLayout->setHorizontalSpacing(10);
-    detailsLayout->setVerticalSpacing(4);
-    m_patientNameValueLabel = new QLabel("-", previewContainer);
-    m_patientDobValueLabel = new QLabel("-", previewContainer);
-    m_patientAgeValueLabel = new QLabel("-", previewContainer);
-    m_doctorValueLabel = new QLabel("-", previewContainer);
-    m_modalityValueLabel = new QLabel("-", previewContainer);
-    m_studyDateValueLabel = new QLabel("-", previewContainer);
-
-    for (QLabel* label :
-         {m_patientNameValueLabel,
-          m_patientDobValueLabel,
-          m_patientAgeValueLabel,
-          m_doctorValueLabel,
-          m_modalityValueLabel,
-          m_studyDateValueLabel})
-    {
-        label->setWordWrap(true);
-    }
-
-    detailsLayout->addWidget(new QLabel("Name", previewContainer), 0, 0);
-    detailsLayout->addWidget(m_patientNameValueLabel, 0, 1);
-    detailsLayout->addWidget(new QLabel("DOB", previewContainer), 0, 2);
-    detailsLayout->addWidget(m_patientDobValueLabel, 0, 3);
-    detailsLayout->addWidget(new QLabel("Age", previewContainer), 1, 0);
-    detailsLayout->addWidget(m_patientAgeValueLabel, 1, 1);
-    detailsLayout->addWidget(new QLabel("Doctor", previewContainer), 1, 2);
-    detailsLayout->addWidget(m_doctorValueLabel, 1, 3);
-    detailsLayout->addWidget(new QLabel("Modality", previewContainer), 2, 0);
-    detailsLayout->addWidget(m_modalityValueLabel, 2, 1);
-    detailsLayout->addWidget(new QLabel("Scan Date", previewContainer), 2, 2);
-    detailsLayout->addWidget(m_studyDateValueLabel, 2, 3);
-    detailsLayout->setColumnStretch(1, 1);
-    detailsLayout->setColumnStretch(3, 1);
-    previewLayout->addLayout(detailsLayout);
-    previewLayout->addStretch();
-
-    m_leftPanelSplitter->addWidget(m_treeView);
-    m_leftPanelSplitter->addWidget(previewContainer);
-    m_leftPanelSplitter->setStretchFactor(0, 3);
-    m_leftPanelSplitter->setStretchFactor(1, 1);
-
-    m_ui->horizontalLayout->replaceWidget(m_ui->listFileView, m_leftPanelSplitter);
-    m_ui->listFileView->deleteLater();
-
-    m_view = new DicomGraphicsView(this);
-    m_ui->horizontalLayout->replaceWidget(m_ui->graphicsView, m_view);
-    m_ui->graphicsView->deleteLater();
+void DicomMainWindow::setupViewerSurface()
+{
+    m_view = new VtkDiagnosticSliceView(this);
+    m_ui->horizontalLayout->replaceWidget(m_ui->viewerHost, m_view);
+    m_ui->viewerHost->deleteLater();
     m_ui->horizontalLayout->setSpacing(8);
 
+    m_view->setSliceNavigationState(0, 0);
+    m_view->setCineAvailable(false);
+    m_view->setCinePlaying(false);
+}
+
+void DicomMainWindow::setupLegacyViewerControls()
+{
     m_ui->contrastVerticalSlider->hide();
     m_ui->imageVerticalSlider->hide();
     m_ui->cineCheckBox->hide();
     m_ui->cineLabel->hide();
     m_ui->viewerControlsSeparator->hide();
+}
 
-    m_view->setSliceNavigationState(0, 0);
-    m_view->setCineAvailable(false);
-    m_view->setCinePlaying(false);
-
+void DicomMainWindow::setupCoreServices()
+{
     m_cineTimer = new QTimer(this);
     m_cineTimer->setInterval(100);
 
     m_gdcmHandler = std::make_unique<GDCMFileHandling>();
-    m_volumeBuilder = std::make_unique<VolumeBuilder>(m_appConfigService->loadVolumeValidationSettings());
-    m_windowingAnalysisService = std::make_unique<WindowingAnalysisService>();
+    m_advancedSeriesVolumeService = std::make_unique<AdvancedSeriesVolumeService>(
+        *m_gdcmHandler,
+        m_appConfigService->loadVolumeValidationSettings());
     m_viewportController = std::make_unique<DicomViewportController>(
         m_gdcmHandler.get(),
-        &m_renderService,
-        m_windowingAnalysisService.get(),
         this);
     rebuildAiAssistantService();
     m_databaseService = std::make_unique<PostgreService>(m_appConfigService->loadDatabaseSettings());
-    setupAiDock();
+    if (m_treeController)
+    {
+        m_treeController->setDatabaseService(m_databaseService.get());
+    }
+}
+
+void DicomMainWindow::setupAsyncInfrastructure()
+{
     m_aiResponseWatcher = new QFutureWatcher<AiChatResponse>(this);
     m_folderImportWatcher = new QFutureWatcher<FolderImportResult>(this);
+}
 
+void DicomMainWindow::initializeDatabaseAndTree()
+{
     const bool databaseInitialized = m_databaseService->initialize();
     if (!databaseInitialized)
     {
@@ -307,8 +169,7 @@ void DicomMainWindow::setUiComponents()
         m_warningDialogService->showWarning("Database Configuration", warningMessage);
     }
 
-    setupConnections();
-    refreshHierarchyTree();
+    refreshHierarchyForGlobalSearch();
 }
 
 void DicomMainWindow::setupMenuBar()
@@ -335,67 +196,63 @@ void DicomMainWindow::setupMenuBar()
     connect(m_openThreeDAction, &QAction::triggered, this, &DicomMainWindow::openThreeDViewer);
 }
 
+void DicomMainWindow::setupViewerToolbar()
+{
+    const auto presetValue = [](ViewportWindowPreset preset) {
+        return static_cast<int>(preset);
+    };
+
+    m_viewerToolBar = addToolBar("Viewer");
+    m_viewerToolBar->setMovable(false);
+
+    m_windowLevelToolAction = new QAction("WL/WW", this);
+    m_windowLevelToolAction->setCheckable(true);
+    m_viewerToolBar->addAction(m_windowLevelToolAction);
+    connect(m_windowLevelToolAction, &QAction::toggled, this, &DicomMainWindow::onWindowLevelToolToggled);
+
+    m_zoomToolAction = new QAction("Zoom", this);
+    m_zoomToolAction->setCheckable(true);
+    m_viewerToolBar->addAction(m_zoomToolAction);
+    connect(m_zoomToolAction, &QAction::toggled, this, &DicomMainWindow::onZoomToolToggled);
+
+    m_viewerToolBar->addSeparator();
+
+    auto* presetLabel = new QLabel("Preset:", this);
+    m_viewerToolBar->addWidget(presetLabel);
+
+    m_windowLevelPresetComboBox = new QComboBox(this);
+    m_windowLevelPresetComboBox->addItem("Custom", presetValue(ViewportWindowPreset::Custom));
+    m_windowLevelPresetComboBox->addItem("Brain", presetValue(ViewportWindowPreset::Brain));
+    m_windowLevelPresetComboBox->addItem("Soft Tissue", presetValue(ViewportWindowPreset::SoftTissue));
+    m_windowLevelPresetComboBox->addItem("Bone", presetValue(ViewportWindowPreset::Bone));
+    m_windowLevelPresetComboBox->addItem("Lung", presetValue(ViewportWindowPreset::Lung));
+    m_viewerToolBar->addWidget(m_windowLevelPresetComboBox);
+    connect(m_windowLevelPresetComboBox, &QComboBox::currentIndexChanged, this, &DicomMainWindow::onWindowLevelPresetSelected);
+    syncViewerToolbarState();
+}
+
 void DicomMainWindow::setupConnections()
 {
-    if (m_treeView)
+    if (m_treeController && m_treePanel)
     {
-        connect(m_treeView, &QTreeView::clicked, this, &DicomMainWindow::onHierarchyItemActivated);
-        connect(m_treeView, &QTreeView::expanded, this, &DicomMainWindow::onHierarchyItemExpanded);
-    }
-
-    if (m_searchLineEdit)
-    {
-        connect(m_searchLineEdit, &QLineEdit::textChanged, this, &DicomMainWindow::onLocalSearchTextChanged);
-    }
-
-    if (m_globalSearchLineEdit)
-    {
-        connect(m_globalSearchLineEdit, &QLineEdit::textChanged, this, &DicomMainWindow::onGlobalSearchTextChanged);
+        connect(m_treePanel, &DicomTreePanel::localSearchTextChanged, this, &DicomMainWindow::onLocalSearchTextChanged);
+        m_treeController->bindPanel(m_treePanel);
+        connect(m_treeController, &DicomTreeController::patientContextSelected, this, &DicomMainWindow::onTreePatientContextSelected);
+        connect(m_treeController, &DicomTreeController::seriesSelectionRequested, this, &DicomMainWindow::onTreeSeriesSelectionRequested);
+        connect(m_treeController, &DicomTreeController::fileSelectionRequested, this, &DicomMainWindow::onTreeFileSelectionRequested);
     }
 
     if (m_view)
     {
-        connect(m_view, &DicomGraphicsView::toolModeSelected, this, &DicomMainWindow::onToolChanged);
-        connect(m_view, &DicomGraphicsView::sliceIndexSelected, this, &DicomMainWindow::onImageSliderValueChanged);
-        connect(m_view, &DicomGraphicsView::cinePlaybackToggled, this, &DicomMainWindow::onCineToggled);
-        connect(m_view, &DicomGraphicsView::wheelSliceNavigationRequested, this, &DicomMainWindow::onSliceWheelRequested);
-        connect(m_view, &DicomGraphicsView::distanceMeasurementRequested, this, &DicomMainWindow::onDistanceMeasurementRequested);
-        connect(m_view, &DicomGraphicsView::pixelProbeRequested, this, &DicomMainWindow::onPixelProbeRequested);
-        connect(m_view, &DicomGraphicsView::angleMeasurementRequested, this, &DicomMainWindow::onAngleMeasurementRequested);
+        connect(m_view, &VtkDiagnosticSliceView::sliceIndexSelected, this, &DicomMainWindow::onImageSliderValueChanged);
+        connect(m_view, &VtkDiagnosticSliceView::cinePlaybackToggled, this, &DicomMainWindow::onCineToggled);
+        connect(m_view, &VtkDiagnosticSliceView::wheelSliceNavigationRequested, this, &DicomMainWindow::onSliceWheelRequested);
+        connect(m_view, &VtkDiagnosticSliceView::windowLevelDragDelta, this, &DicomMainWindow::onWindowLevelDragDelta);
     }
 
     if (m_cineTimer)
     {
         connect(m_cineTimer, &QTimer::timeout, this, &DicomMainWindow::advanceCinePlayback);
-    }
-
-    if (m_windowLevelSlider)
-    {
-        connect(m_windowLevelSlider, &QSlider::valueChanged, this, &DicomMainWindow::onWindowLevelChanged);
-    }
-
-    if (m_windowWidthSlider)
-    {
-        connect(m_windowWidthSlider, &QSlider::valueChanged, this, &DicomMainWindow::onWindowWidthChanged);
-    }
-
-    if (m_presetComboBox)
-    {
-        connect(m_presetComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &DicomMainWindow::onPresetChanged);
-    }
-
-    if (m_autoWindowPresetComboBox)
-    {
-        connect(
-            m_autoWindowPresetComboBox,
-            QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this,
-            &DicomMainWindow::onAutoWindowPresetChanged);
-    }
-
-    if (m_openMprButton)
-    {
-        connect(m_openMprButton, &QPushButton::clicked, this, &DicomMainWindow::openMprViewer);
     }
 
     if (m_aiAskButton)
@@ -419,168 +276,11 @@ void DicomMainWindow::setupConnections()
     }
 }
 
-void DicomMainWindow::refreshHierarchyTree()
-{
-    if (!m_treeModel)
-    {
-        return;
-    }
-
-    m_treeModel->removeRows(0, m_treeModel->rowCount());
-    if (!m_databaseService)
-    {
-        return;
-    }
-
-    const QString globalSearchText = m_globalSearchLineEdit ? m_globalSearchLineEdit->text().trimmed() : QString();
-    const QList<DatabaseService::PatientPtr> patients = m_databaseService->getAllPatients(globalSearchText);
-    for (const auto& patient : patients)
-    {
-        addPatientToTree(patient);
-    }
-
-    applyTreeFilter(m_searchLineEdit ? m_searchLineEdit->text() : QString());
-}
-
-void DicomMainWindow::addPatientToTree(const std::shared_ptr<Patient>& patient)
-{
-    if (!patient || !m_treeModel)
-    {
-        return;
-    }
-
-    QString patientLabel = patient->patientName().trimmed();
-    if (patientLabel.isEmpty())
-    {
-        patientLabel = patient->patientId().trimmed();
-    }
-    if (patientLabel.isEmpty())
-    {
-        patientLabel = "Unnamed Patient";
-    }
-    if (!patient->dateOfBirth().trimmed().isEmpty())
-    {
-        patientLabel += " | " + patient->dateOfBirth().trimmed();
-    }
-
-    auto* patientItem = new QStandardItem(patientLabel);
-    patientItem->setData(kNodeTypePatient, kNodeTypeRole);
-    patientItem->setData(false, kChildrenLoadedRole);
-    patientItem->setData(patient->patientId(), kPatientIdRole);
-    patientItem->setData(patient->patientName(), kPatientNameRole);
-    patientItem->setData(patient->dateOfBirth(), kPatientDobRole);
-    patientItem->setData(
-        QString("%1 %2 %3").arg(patient->patientId(), patient->patientName(), patient->dateOfBirth()),
-        kSearchTextRole);
-    m_treeModel->invisibleRootItem()->appendRow(patientItem);
-    patientItem->appendRow(new QStandardItem("Loading..."));
-}
-
-void DicomMainWindow::addStudyToTree(
-    QStandardItem* patientItem,
-    const std::shared_ptr<Patient>& patient,
-    const std::shared_ptr<Study>& study)
-{
-    if (!patientItem || !patient || !study)
-    {
-        return;
-    }
-
-    QString studyLabel = study->studyDescription().trimmed();
-    if (studyLabel.isEmpty())
-    {
-        studyLabel = "Unnamed Study";
-    }
-    if (!study->studyDate().trimmed().isEmpty())
-    {
-        studyLabel += " | " + study->studyDate().trimmed();
-    }
-    if (!study->doctorName().trimmed().isEmpty())
-    {
-        studyLabel += " | " + study->doctorName().trimmed();
-    }
-
-    auto* studyItem = new QStandardItem(studyLabel);
-    studyItem->setData(kNodeTypeStudy, kNodeTypeRole);
-    studyItem->setData(false, kChildrenLoadedRole);
-    studyItem->setData(patient->patientId(), kPatientIdRole);
-    studyItem->setData(study->studyInstanceUid(), kStudyInstanceUidRole);
-    studyItem->setData(patient->patientName(), kPatientNameRole);
-    studyItem->setData(patient->dateOfBirth(), kPatientDobRole);
-    studyItem->setData(study->doctorName(), kDoctorNameRole);
-    studyItem->setData(study->studyDate(), kStudyDateRole);
-    studyItem->setData(
-        QString("%1 %2 %3 %4 %5")
-            .arg(patient->patientId(),
-                 patient->patientName(),
-                 patient->dateOfBirth(),
-                 study->doctorName(),
-                 study->studyDate()),
-        kSearchTextRole);
-    studyItem->appendRow(new QStandardItem("Loading..."));
-    patientItem->appendRow(studyItem);
-}
-
-void DicomMainWindow::addSeriesToTree(
-    QStandardItem* studyItem,
-    const std::shared_ptr<Patient>& patient,
-    const std::shared_ptr<Study>& study,
-    const std::shared_ptr<Series>& series)
-{
-    if (!studyItem || !patient || !study || !series)
-    {
-        return;
-    }
-
-    QString seriesLabel = series->modality().trimmed();
-    const QString seriesDescription = series->seriesDescription().trimmed();
-    if (!seriesDescription.isEmpty())
-    {
-        seriesLabel = seriesLabel.isEmpty() ? seriesDescription : seriesLabel + " | " + seriesDescription;
-    }
-    if (seriesLabel.isEmpty())
-    {
-        seriesLabel = "Unnamed Series";
-    }
-
-    auto* seriesItem = new QStandardItem(seriesLabel);
-    seriesItem->setData(kNodeTypeSeries, kNodeTypeRole);
-    seriesItem->setData(true, kChildrenLoadedRole);
-    seriesItem->setData(series->seriesInstanceUid(), kSeriesInstanceUidRole);
-    seriesItem->setData(patient->patientId(), kPatientIdRole);
-    seriesItem->setData(study->studyInstanceUid(), kStudyInstanceUidRole);
-    seriesItem->setData(patient->patientName(), kPatientNameRole);
-    seriesItem->setData(patient->dateOfBirth(), kPatientDobRole);
-    seriesItem->setData(study->doctorName(), kDoctorNameRole);
-    seriesItem->setData(series->modality(), kModalityRole);
-    seriesItem->setData(study->studyDate(), kStudyDateRole);
-    seriesItem->setData(
-        QString("%1 %2 %3 %4 %5 %6")
-            .arg(patient->patientId(),
-                 patient->patientName(),
-                 patient->dateOfBirth(),
-                 study->doctorName(),
-                 series->modality(),
-                 study->studyDate()),
-        kSearchTextRole);
-
-            if (series->imageCount() > 0)
-            {
-                seriesItem->setText(seriesLabel + QString(" | %1 slices").arg(series->imageCount()));
-                seriesItem->setData(series->representativeFilePath(), kFilePathRole);
-            }
-    studyItem->appendRow(seriesItem);
-}
-
 void DicomMainWindow::clearCurrentSeries()
 {
     if (m_viewportController)
     {
         m_viewportController->clear();
-    }
-    if (m_view)
-    {
-        m_view->clearMeasurementOverlays();
     }
 
     if (m_cineTimer)
@@ -596,18 +296,33 @@ void DicomMainWindow::clearCurrentSeries()
     }
 
     updateCineControls();
-    updateImageControlsState(true);
-    updatePreviewPane(QPixmap());
+    if (m_treePanel)
+    {
+        m_treePanel->updatePreviewPane(QPixmap());
+    }
+
+    m_currentPatientName.clear();
+    m_currentPatientDob.clear();
+    m_currentPatientAge.clear();
+    m_currentDoctorName.clear();
+    m_currentModality.clear();
+    m_currentStudyDate.clear();
+    if (m_view)
+    {
+        m_view->setPatientInfoText({}, {}, {}, {}, {}, {});
+    }
+    m_resetViewerFitOnNextImage = true;
+    syncViewerToolbarState();
+    MemoryManagementDebug::logMainViewerSnapshot(m_viewportController.get(), m_view, "clearCurrentSeries");
 }
 
-void DicomMainWindow::updatePatientInfoPanel(QStandardItem* item)
+void DicomMainWindow::updatePatientInfo(
+    const QString& patientName,
+    const QString& patientDob,
+    const QString& doctorName,
+    const QString& modality,
+    const QString& studyDate)
 {
-    const QString patientName = item ? item->data(kPatientNameRole).toString() : QString();
-    const QString patientDob = item ? item->data(kPatientDobRole).toString() : QString();
-    const QString doctorName = item ? item->data(kDoctorNameRole).toString() : QString();
-    const QString modality = item ? item->data(kModalityRole).toString() : QString();
-    const QString studyDate = item ? item->data(kStudyDateRole).toString() : QString();
-
     QDate dobDate = QDate::fromString(patientDob, "yyyy-MM-dd");
     if (!dobDate.isValid())
     {
@@ -620,83 +335,23 @@ void DicomMainWindow::updatePatientInfoPanel(QStandardItem* item)
         ageText = QString::number(dobDate.daysTo(QDate::currentDate()) / 365);
     }
 
-    m_patientNameValueLabel->setText(patientName.isEmpty() ? "-" : patientName);
-    m_patientDobValueLabel->setText(patientDob.isEmpty() ? "-" : patientDob);
-    m_patientAgeValueLabel->setText(ageText);
-    m_doctorValueLabel->setText(doctorName.isEmpty() ? "-" : doctorName);
-    m_modalityValueLabel->setText(modality.isEmpty() ? "-" : modality);
-    m_studyDateValueLabel->setText(studyDate.isEmpty() ? "-" : studyDate);
-}
+    m_currentPatientName = patientName.trimmed();
+    m_currentPatientDob = patientDob.trimmed();
+    m_currentPatientAge = ageText.trimmed() == "-" ? QString() : ageText.trimmed();
+    m_currentDoctorName = doctorName.trimmed();
+    m_currentModality = modality.trimmed();
+    m_currentStudyDate = studyDate.trimmed();
 
-void DicomMainWindow::updatePreviewPane(const QPixmap& pixmap)
-{
-    if (!m_previewImageLabel)
+    if (m_view)
     {
-        return;
+        m_view->setPatientInfoText(
+            m_currentPatientName,
+            m_currentPatientAge,
+            m_currentPatientDob,
+            m_currentDoctorName,
+            m_currentModality,
+            m_currentStudyDate);
     }
-
-    if (pixmap.isNull())
-    {
-        m_previewImageLabel->setPixmap(QPixmap());
-        m_previewImageLabel->setText("No preview");
-        return;
-    }
-
-    m_previewImageLabel->setText(QString());
-    m_previewImageLabel->setPixmap(
-        pixmap.scaled(m_previewImageLabel->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
-}
-
-void DicomMainWindow::updateSeriesPreview(const std::shared_ptr<Series>& series)
-{
-    if (!series || series->previewPixmap().isNull())
-    {
-        updatePreviewPane(QPixmap());
-        return;
-    }
-
-    updatePreviewPane(series->previewPixmap());
-}
-
-void DicomMainWindow::applyTreeFilter(const QString& filterText)
-{
-    if (!m_treeModel || !m_treeView)
-    {
-        return;
-    }
-
-    const QString normalizedFilter = filterText.trimmed().toLower();
-    for (int row = 0; row < m_treeModel->rowCount(); ++row)
-    {
-        QStandardItem* item = m_treeModel->item(row);
-        const bool isVisible = updateItemVisibility(item, normalizedFilter);
-        m_treeView->setRowHidden(row, QModelIndex(), !isVisible);
-    }
-}
-
-bool DicomMainWindow::updateItemVisibility(QStandardItem* item, const QString& filterText)
-{
-    if (!item)
-    {
-        return false;
-    }
-
-    bool childVisible = false;
-    for (int row = 0; row < item->rowCount(); ++row)
-    {
-        QStandardItem* childItem = item->child(row);
-        const bool isChildVisible = updateItemVisibility(childItem, filterText);
-        m_treeView->setRowHidden(row, item->index(), !isChildVisible);
-        childVisible = childVisible || isChildVisible;
-    }
-
-    if (filterText.isEmpty())
-    {
-        return true;
-    }
-
-    const QString searchText = item->data(kSearchTextRole).toString().toLower();
-    return searchText.contains(filterText) || childVisible;
 }
 
 void DicomMainWindow::updateCineControls()
@@ -715,6 +370,28 @@ void DicomMainWindow::updateCineControls()
             m_view->setCinePlaying(false);
         }
     }
+}
+
+void DicomMainWindow::displayImageInViewer(const DicomImage& image, int windowLevel, int windowWidth)
+{
+    if (!m_view)
+    {
+        return;
+    }
+
+    m_view->setDicomImage(image, windowLevel, windowWidth, m_resetViewerFitOnNextImage);
+    m_resetViewerFitOnNextImage = false;
+}
+
+void DicomMainWindow::displayImageInViewer(const std::shared_ptr<DicomImage>& image)
+{
+    if (!m_view || !image)
+    {
+        return;
+    }
+
+    m_view->setImage(image, m_resetViewerFitOnNextImage);
+    m_resetViewerFitOnNextImage = false;
 }
 
 void DicomMainWindow::displayCurrentSlice()
@@ -738,7 +415,6 @@ void DicomMainWindow::displayCurrentSlice()
 
     if (!cinePlaying)
     {
-        updateImageControlsState(false);
     }
     applyImageAdjustments();
 
@@ -758,6 +434,7 @@ void DicomMainWindow::displayCurrentSlice()
                                : failedFilePath)
                      .fileName()),
         4000);
+    MemoryManagementDebug::logMainViewerSnapshot(m_viewportController.get(), m_view, "displayCurrentSlice");
 }
 
 void DicomMainWindow::loadSeries(const std::shared_ptr<Series>& series, int initialIndex)
@@ -770,7 +447,11 @@ void DicomMainWindow::loadSeries(const std::shared_ptr<Series>& series, int init
     }
 
     m_viewportController->setSeries(series, initialIndex);
-    updateSeriesPreview(series);
+    m_resetViewerFitOnNextImage = true;
+    if (m_treePanel)
+    {
+        m_treePanel->updateSeriesPreview(series);
+    }
     const int imageCount = m_viewportController->imageCount();
 
     if (m_view)
@@ -780,6 +461,7 @@ void DicomMainWindow::loadSeries(const std::shared_ptr<Series>& series, int init
 
     updateCineControls();
     displayCurrentSlice();
+    MemoryManagementDebug::logMainViewerSnapshot(m_viewportController.get(), m_view, "loadSeries");
 }
 
 void DicomMainWindow::loadAndDisplayImage(const QString& filePath)
@@ -805,23 +487,29 @@ void DicomMainWindow::loadAndDisplayImage(const QString& filePath)
     {
         auto singleImage = std::shared_ptr<DicomImage>(static_cast<DicomImage*>(loadedImage.release()));
         m_viewportController->setSingleImage(singleImage);
+        m_resetViewerFitOnNextImage = true;
         m_view->setSliceNavigationState(0, 1);
         m_view->setCineAvailable(false);
         m_view->setCinePlaying(false);
-        updateImageControlsState(true);
-        updatePreviewPane(singleImage->pixmap());
+        if (m_treePanel)
+        {
+            m_treePanel->updatePreviewPane(createDicomPreviewPixmap(*singleImage));
+        }
         applyImageAdjustments();
+        MemoryManagementDebug::logMainViewerSnapshot(m_viewportController.get(), m_view, "loadAndDisplayImage-single");
         return;
     }
 
     std::shared_ptr<MedicalImage> image = std::move(loadedImage);
-    m_view->setImage(std::move(image));
+    m_resetViewerFitOnNextImage = true;
+    m_view->setImage(std::move(image), true);
     statusBar()->showMessage("Loaded: " + QFileInfo(filePath).fileName(), 4000);
+    MemoryManagementDebug::logMainViewerSnapshot(m_viewportController.get(), m_view, "loadAndDisplayImage-generic");
 }
 
 void DicomMainWindow::openMprViewer()
 {
-    if (!m_viewportController || !m_volumeBuilder || !m_advancedViewerLauncher)
+    if (!m_viewportController || !m_advancedSeriesVolumeService || !m_advancedViewerLauncher)
     {
         return;
     }
@@ -835,58 +523,19 @@ void DicomMainWindow::openMprViewer()
 
     LoadingDialog loadingDialog(this);
     loadingDialog.show("Loading MPR", "Preparing MPR viewer...");
-
-    for (auto& image : selectedSeries->images())
-    {
-        if (!image)
-        {
-            continue;
-        }
-
-        if (!m_viewportController->ensureImageLoaded(*image))
-        {
-            loadingDialog.close();
-            m_warningDialogService->showWarning(
-                "MPR Viewer",
-                "Failed to fully load all slices required for MPR.");
-            return;
-        }
-    }
-
-    std::shared_ptr<IVolumeData> volume;
-    try
-    {
-        loadingDialog.setMessage("Building MPR volume...");
-        const Series& diagnosticSeries = *selectedSeries;
-        volume = m_volumeBuilder->buildFromDiagnosticSeries(diagnosticSeries);
-    }
-    catch (const std::exception& exception)
+    loadingDialog.setMessage("Loading diagnostic series...");
+    const auto volumeResult = m_advancedSeriesVolumeService->buildDiagnosticVolume(*selectedSeries);
+    if (!volumeResult)
     {
         loadingDialog.close();
-        m_warningDialogService->showWarning("MPR Viewer", QString("Failed to build volume: %1").arg(exception.what()));
+        m_warningDialogService->showError(volumeResult.error());
         return;
     }
-
-    if (!volume)
-    {
-        loadingDialog.close();
-        m_warningDialogService->showWarning("MPR Viewer", "Unable to build a volume from the selected series.");
-        return;
-    }
-
-    QString title = "MPR Viewer";
-    if (!selectedSeries->seriesDescription().trimmed().isEmpty())
-    {
-        title += " - " + selectedSeries->seriesDescription().trimmed();
-    }
-    else if (!selectedSeries->modality().trimmed().isEmpty())
-    {
-        title += " - " + selectedSeries->modality().trimmed();
-    }
+    std::shared_ptr<IVolumeData> volume = volumeResult.value();
 
     QWidget* viewer = m_advancedViewerLauncher->showMprVolume(
         std::move(volume),
-        title,
+        buildAdvancedViewerTitle("MPR Viewer", *selectedSeries),
         m_viewportController->currentWindowLevel(),
         m_viewportController->currentWindowWidth(),
         this);
@@ -900,7 +549,7 @@ void DicomMainWindow::openMprViewer()
 
 void DicomMainWindow::openThreeDViewer()
 {
-    if (!m_viewportController || !m_volumeBuilder || !m_advancedViewerLauncher || !m_gdcmHandler)
+    if (!m_viewportController || !m_advancedSeriesVolumeService || !m_advancedViewerLauncher)
     {
         return;
     }
@@ -915,44 +564,20 @@ void DicomMainWindow::openThreeDViewer()
     LoadingDialog loadingDialog(this);
     loadingDialog.show("Loading 3D", "Preparing 3D viewer...");
 
-    std::shared_ptr<IVolumeData> diagnosticVolume;
     const ThreeDProfileSelection profileSelection = ThreeDProfileSelector::selectForSeries(*selectedSeries);
-    try
-    {
-        loadingDialog.setMessage("Loading diagnostic series...");
-        SeriesDataLoadService seriesDataLoadService(*m_gdcmHandler);
-        const Series diagnosticSeries = seriesDataLoadService.loadDiagnosticSeries(*selectedSeries);
-
-        loadingDialog.setMessage("Building 3D volume...");
-        diagnosticVolume = m_volumeBuilder->buildFromDiagnosticSeries(diagnosticSeries);
-    }
-    catch (const std::exception& exception)
+    loadingDialog.setMessage("Loading diagnostic series...");
+    const auto diagnosticVolumeResult = m_advancedSeriesVolumeService->buildDiagnosticVolume(*selectedSeries);
+    if (!diagnosticVolumeResult)
     {
         loadingDialog.close();
-        m_warningDialogService->showWarning("3D Viewer", QString("Failed to prepare 3D volume: %1").arg(exception.what()));
+        m_warningDialogService->showError(diagnosticVolumeResult.error());
         return;
     }
-
-    if (!diagnosticVolume)
-    {
-        loadingDialog.close();
-        m_warningDialogService->showWarning("3D Viewer", "Unable to build a 3D volume from the selected series.");
-        return;
-    }
-
-    QString title = "3D Viewer";
-    if (!selectedSeries->seriesDescription().trimmed().isEmpty())
-    {
-        title += " - " + selectedSeries->seriesDescription().trimmed();
-    }
-    else if (!selectedSeries->modality().trimmed().isEmpty())
-    {
-        title += " - " + selectedSeries->modality().trimmed();
-    }
+    std::shared_ptr<IVolumeData> diagnosticVolume = diagnosticVolumeResult.value();
 
     QWidget* viewer = m_advancedViewerLauncher->showThreeDVolume(
         std::move(diagnosticVolume),
-        title,
+        buildAdvancedViewerTitle("3D Viewer", *selectedSeries),
         profileSelection,
         this);
     loadingDialog.close();
@@ -1157,17 +782,17 @@ QString DicomMainWindow::buildAiContextPrompt() const
         }
     }
 
-    if (m_patientNameValueLabel)
+    if (!m_currentPatientName.isEmpty())
     {
-        contextLines << QString("Patient name: %1").arg(m_patientNameValueLabel->text());
+        contextLines << QString("Patient name: %1").arg(m_currentPatientName);
     }
-    if (m_patientDobValueLabel)
+    if (!m_currentPatientDob.isEmpty())
     {
-        contextLines << QString("Patient DOB: %1").arg(m_patientDobValueLabel->text());
+        contextLines << QString("Patient DOB: %1").arg(m_currentPatientDob);
     }
-    if (m_doctorValueLabel)
+    if (!m_currentDoctorName.isEmpty())
     {
-        contextLines << QString("Doctor: %1").arg(m_doctorValueLabel->text());
+        contextLines << QString("Doctor: %1").arg(m_currentDoctorName);
     }
 
     return contextLines.join('\n');
@@ -1206,19 +831,12 @@ AiChatRequest DicomMainWindow::buildAiChatRequest(const QString& userPrompt, boo
                               ? userPrompt.trimmed()
                               : QString("Context:\n%1\n\nQuestion:\n%2").arg(contextPrompt, userPrompt.trimmed());
 
-    if (includeCurrentImage && m_viewportController)
+    if (includeCurrentImage && m_view)
     {
-        const auto diagnosticImage = m_viewportController->renderCurrentDiagnosticImage();
-        if (diagnosticImage && !diagnosticImage->pixmap().isNull())
+        const QByteArray imageBytes = m_view->captureSnapshotPng();
+        if (!imageBytes.isEmpty())
         {
-            QByteArray imageBytes;
-            QBuffer buffer(&imageBytes);
-            buffer.open(QIODevice::WriteOnly);
-            diagnosticImage->pixmap().toImage().save(&buffer, "PNG");
-            if (!imageBytes.isEmpty())
-            {
-                userMessage.imageAttachments.append({QStringLiteral("image/png"), imageBytes});
-            }
+            userMessage.imageAttachments.append({QStringLiteral("image/png"), imageBytes});
         }
     }
 
@@ -1337,7 +955,7 @@ void DicomMainWindow::openImage()
             if (m_databaseService->savePatient(patientHierarchy))
             {
                 statusMessage += " | Imported into PostgreSQL";
-                refreshHierarchyTree();
+                refreshHierarchyForGlobalSearch();
             }
             else
             {
@@ -1466,131 +1084,6 @@ void DicomMainWindow::openFolder()
     }));
 }
 
-void DicomMainWindow::onHierarchyItemActivated(const QModelIndex& index)
-{
-    if (!index.isValid() || !m_treeModel)
-    {
-        return;
-    }
-
-    QStandardItem* item = m_treeModel->itemFromIndex(index);
-    if (!item)
-    {
-        return;
-    }
-
-    updatePatientInfoPanel(item);
-    const QString nodeType = item->data(kNodeTypeRole).toString();
-    if (nodeType == kNodeTypePatient && m_databaseService)
-    {
-        updatePreviewPane(m_databaseService->getPreviewForPatient(item->data(kPatientIdRole).toString()));
-    }
-    else if (nodeType == kNodeTypeStudy && m_databaseService)
-    {
-        updatePreviewPane(m_databaseService->getPreviewForStudy(item->data(kStudyInstanceUidRole).toString()));
-    }
-    else if (nodeType == kNodeTypeSeries && m_databaseService)
-    {
-        updatePreviewPane(m_databaseService->getPreviewForSeries(item->data(kSeriesInstanceUidRole).toString()));
-    }
-    else
-    {
-        updatePreviewPane(QPixmap());
-    }
-
-    const QString seriesInstanceUid = item->data(kSeriesInstanceUidRole).toString();
-    if (!seriesInstanceUid.isEmpty() && m_databaseService)
-    {
-        loadSeries(m_databaseService->getSeries(seriesInstanceUid));
-        return;
-    }
-
-    const QString filePath = item->data(kFilePathRole).toString();
-    if (filePath.isEmpty())
-    {
-        return;
-    }
-
-    clearCurrentSeries();
-    loadAndDisplayImage(filePath);
-}
-
-void DicomMainWindow::onHierarchyItemExpanded(const QModelIndex& index)
-{
-    if (!index.isValid() || !m_treeModel || !m_databaseService)
-    {
-        return;
-    }
-
-    QStandardItem* item = m_treeModel->itemFromIndex(index);
-    if (!item || item->data(kChildrenLoadedRole).toBool())
-    {
-        return;
-    }
-
-    const QString nodeType = item->data(kNodeTypeRole).toString();
-    if (nodeType == kNodeTypePatient)
-    {
-        const QString patientId = item->data(kPatientIdRole).toString();
-        if (patientId.isEmpty())
-        {
-            item->removeRows(0, item->rowCount());
-            item->setData(true, kChildrenLoadedRole);
-            return;
-        }
-
-        auto patient = std::make_shared<Patient>();
-        patient->setPatientId(patientId);
-        patient->setPatientName(item->data(kPatientNameRole).toString());
-        patient->setDateOfBirth(item->data(kPatientDobRole).toString());
-
-        item->removeRows(0, item->rowCount());
-        const QString globalSearchText = m_globalSearchLineEdit ? m_globalSearchLineEdit->text().trimmed().toLower() : QString();
-        const bool patientMatchesGlobalSearch =
-            globalSearchText.isEmpty() || item->data(kSearchTextRole).toString().toLower().contains(globalSearchText);
-        const QList<DatabaseService::StudyPtr> studies =
-            m_databaseService->getStudiesForPatient(patientId, patientMatchesGlobalSearch ? QString() : globalSearchText);
-        for (const auto& study : studies)
-        {
-            addStudyToTree(item, patient, study);
-        }
-        item->setData(true, kChildrenLoadedRole);
-    }
-    else if (nodeType == kNodeTypeStudy)
-    {
-        const QString patientId = item->data(kPatientIdRole).toString();
-        const QString studyInstanceUid = item->data(kStudyInstanceUidRole).toString();
-        if (patientId.isEmpty() || studyInstanceUid.isEmpty())
-        {
-            item->removeRows(0, item->rowCount());
-            item->setData(true, kChildrenLoadedRole);
-            return;
-        }
-
-        auto patient = std::make_shared<Patient>();
-        patient->setPatientId(patientId);
-        patient->setPatientName(item->data(kPatientNameRole).toString());
-        patient->setDateOfBirth(item->data(kPatientDobRole).toString());
-
-        auto study = std::make_shared<Study>();
-        study->setStudyInstanceUid(studyInstanceUid);
-        study->setDoctorName(item->data(kDoctorNameRole).toString());
-        study->setStudyDate(item->data(kStudyDateRole).toString());
-
-        item->removeRows(0, item->rowCount());
-        const QString globalSearchText = m_globalSearchLineEdit ? m_globalSearchLineEdit->text().trimmed().toLower() : QString();
-        const bool studyMatchesGlobalSearch =
-            globalSearchText.isEmpty() || item->data(kSearchTextRole).toString().toLower().contains(globalSearchText);
-        const QList<DatabaseService::SeriesPtr> seriesList =
-            m_databaseService->getSeriesForStudy(studyInstanceUid, studyMatchesGlobalSearch ? QString() : globalSearchText);
-        for (const auto& series : seriesList)
-        {
-            addSeriesToTree(item, patient, study, series);
-        }
-        item->setData(true, kChildrenLoadedRole);
-    }
-}
-
 void DicomMainWindow::onImageSliderValueChanged(int value)
 {
     if (!m_viewportController || !m_viewportController->currentSeries() || value == m_viewportController->currentImageIndex())
@@ -1618,6 +1111,79 @@ void DicomMainWindow::onSliceWheelRequested(int stepCount)
     onImageSliderValueChanged(nextIndex);
 }
 
+void DicomMainWindow::onWindowLevelToolToggled(bool checked)
+{
+    if (checked && m_zoomToolAction && m_zoomToolAction->isChecked())
+    {
+        m_zoomToolAction->blockSignals(true);
+        m_zoomToolAction->setChecked(false);
+        m_zoomToolAction->blockSignals(false);
+    }
+    setViewerInteractionMode(checked, false);
+}
+
+void DicomMainWindow::onZoomToolToggled(bool checked)
+{
+    if (checked && m_windowLevelToolAction && m_windowLevelToolAction->isChecked())
+    {
+        m_windowLevelToolAction->blockSignals(true);
+        m_windowLevelToolAction->setChecked(false);
+        m_windowLevelToolAction->blockSignals(false);
+    }
+    setViewerInteractionMode(false, checked);
+}
+
+void DicomMainWindow::onWindowLevelPresetSelected()
+{
+    if (!m_viewportController || !m_windowLevelPresetComboBox)
+    {
+        return;
+    }
+
+    const auto selectedPreset = static_cast<ViewportWindowPreset>(m_windowLevelPresetComboBox->currentData().toInt());
+    if (selectedPreset == ViewportWindowPreset::Custom)
+    {
+        m_viewportController->resetPreset();
+        syncViewerToolbarState();
+        return;
+    }
+
+    if (!m_viewportController->applyPreset(selectedPreset))
+    {
+        return;
+    }
+
+    applyImageAdjustments();
+}
+
+void DicomMainWindow::onWindowLevelDragDelta(int deltaLevel, int deltaWidth)
+{
+    if (!m_viewportController)
+    {
+        return;
+    }
+
+    const auto state = m_viewportController->windowControlState(false);
+    if (!state.hasImage)
+    {
+        return;
+    }
+
+    const int nextLevel = std::clamp(
+        m_viewportController->currentWindowLevel() + deltaLevel,
+        state.levelMin,
+        state.levelMax);
+    const int nextWidth = std::clamp(
+        m_viewportController->currentWindowWidth() + deltaWidth,
+        state.widthMin,
+        state.widthMax);
+
+    m_viewportController->setWindowLevel(nextLevel);
+    m_viewportController->setWindowWidth(nextWidth);
+    m_viewportController->resetPreset();
+    applyImageAdjustments();
+}
+
 void DicomMainWindow::onCineToggled(bool checked)
 {
     if (!m_cineTimer)
@@ -1637,7 +1203,6 @@ void DicomMainWindow::onCineToggled(bool checked)
     else
     {
         m_cineTimer->stop();
-        updateImageControlsState(false);
     }
 }
 
@@ -1653,13 +1218,44 @@ void DicomMainWindow::advanceCinePlayback()
 
 void DicomMainWindow::onLocalSearchTextChanged(const QString& text)
 {
-    applyTreeFilter(text);
+    Q_UNUSED(text);
 }
 
 void DicomMainWindow::onGlobalSearchTextChanged(const QString& text)
 {
     Q_UNUSED(text);
     refreshHierarchyForGlobalSearch();
+}
+
+void DicomMainWindow::onTreePatientContextSelected(
+    const QString& patientName,
+    const QString& patientDob,
+    const QString& doctorName,
+    const QString& modality,
+    const QString& studyDate)
+{
+    updatePatientInfo(patientName, patientDob, doctorName, modality, studyDate);
+}
+
+void DicomMainWindow::onTreeSeriesSelectionRequested(const QString& seriesInstanceUid)
+{
+    if (!m_databaseService || seriesInstanceUid.isEmpty())
+    {
+        return;
+    }
+
+    loadSeries(m_databaseService->getSeries(seriesInstanceUid));
+}
+
+void DicomMainWindow::onTreeFileSelectionRequested(const QString& filePath)
+{
+    if (filePath.isEmpty())
+    {
+        return;
+    }
+
+    clearCurrentSeries();
+    loadAndDisplayImage(filePath);
 }
 
 void DicomMainWindow::onFolderImportFinished()
@@ -1702,7 +1298,7 @@ void DicomMainWindow::onFolderImportFinished()
         m_warningDialogService->showWarning("Database Import", message);
     }
 
-    refreshHierarchyTree();
+    refreshHierarchyForGlobalSearch();
     statusBar()->showMessage(
         QString("Imported folder %1 | Patients saved: %2").arg(result.folderName).arg(result.importedPatientCount),
         6000);
@@ -1710,58 +1306,12 @@ void DicomMainWindow::onFolderImportFinished()
 
 void DicomMainWindow::refreshHierarchyForGlobalSearch()
 {
-    refreshHierarchyTree();
-}
+    if (!m_treeController)
+    {
+        return;
+    }
 
-void DicomMainWindow::setupImageControlsDock()
-{
-    m_imageControlsDock = new QDockWidget("Image Controls", this);
-    m_imageControlsDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
-    m_imageControlsDock->setFeatures(
-        QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable | QDockWidget::DockWidgetClosable);
-
-    auto* dockContentWidget = new QWidget(m_imageControlsDock);
-    auto* dockLayout = new QVBoxLayout(dockContentWidget);
-
-    m_presetComboBox = new QComboBox(dockContentWidget);
-    m_presetComboBox->addItem("Custom");
-    m_presetComboBox->addItem("CT Bone");
-    m_presetComboBox->addItem("CT Lung");
-    m_presetComboBox->addItem("CT Brain");
-    m_presetComboBox->addItem("Soft Tissue");
-    dockLayout->addWidget(new QLabel("Manual Preset", dockContentWidget));
-    dockLayout->addWidget(m_presetComboBox);
-
-    m_windowLevelValueLabel = new QLabel("0", dockContentWidget);
-    m_windowLevelSlider = new QSlider(Qt::Horizontal, dockContentWidget);
-    m_windowLevelSlider->setRange(-100, 100);
-    m_windowLevelSlider->setValue(0);
-    dockLayout->addWidget(new QLabel("Window Level (Brightness)", dockContentWidget));
-    dockLayout->addWidget(m_windowLevelValueLabel);
-    dockLayout->addWidget(m_windowLevelSlider);
-
-    m_windowWidthValueLabel = new QLabel("100", dockContentWidget);
-    m_windowWidthSlider = new QSlider(Qt::Horizontal, dockContentWidget);
-    m_windowWidthSlider->setRange(10, 300);
-    m_windowWidthSlider->setValue(100);
-    dockLayout->addWidget(new QLabel("Window Width (Contrast)", dockContentWidget));
-    dockLayout->addWidget(m_windowWidthValueLabel);
-    dockLayout->addWidget(m_windowWidthSlider);
-
-    m_autoWindowPresetComboBox = new QComboBox(dockContentWidget);
-    m_autoWindowPresetComboBox->addItem("None");
-    m_autoWindowPresetComboBox->addItem("General Head CT (1% / 99%)");
-    m_autoWindowPresetComboBox->addItem("Brain Focused (5% / 95%)");
-    m_autoWindowPresetComboBox->addItem("Bone Heavy (2% / 98%)");
-    dockLayout->addWidget(new QLabel("Auto Window Analysis", dockContentWidget));
-    dockLayout->addWidget(m_autoWindowPresetComboBox);
-    m_openMprButton = new QPushButton("Open MPR", dockContentWidget);
-    m_openMprButton->setObjectName("primaryActionButton");
-    dockLayout->addWidget(m_openMprButton);
-    dockLayout->addStretch();
-
-    m_imageControlsDock->setWidget(dockContentWidget);
-    addDockWidget(Qt::RightDockWidgetArea, m_imageControlsDock);
+    m_treeController->refreshHierarchy();
 }
 
 void DicomMainWindow::setupAiDock()
@@ -1838,65 +1388,48 @@ void DicomMainWindow::setupAiDock()
 
     m_aiDock->setWidget(dockContentWidget);
     addDockWidget(Qt::RightDockWidgetArea, m_aiDock);
-    if (m_imageControlsDock)
-    {
-        splitDockWidget(m_imageControlsDock, m_aiDock, Qt::Vertical);
-    }
-
     m_aiDock->setMinimumHeight(260);
     refreshAiDockState();
 }
 
-void DicomMainWindow::updateImageControlsState(bool resetWindowState)
+void DicomMainWindow::setViewerInteractionMode(bool windowLevelEnabled, bool zoomEnabled)
 {
-    if (!m_viewportController)
+    if (!m_view)
     {
         return;
     }
 
-    const auto state = m_viewportController->windowControlState(resetWindowState);
-    const bool hasImage = state.hasImage;
+    m_view->setWindowLevelInteractionEnabled(windowLevelEnabled);
+    m_view->setZoomInteractionEnabled(zoomEnabled);
+}
 
-    if (m_imageControlsDock)
-    {
-        m_imageControlsDock->setEnabled(hasImage);
-    }
-
-    if (!hasImage || !m_windowLevelSlider || !m_windowWidthSlider)
+void DicomMainWindow::syncViewerToolbarState()
+{
+    if (!m_windowLevelToolAction || !m_zoomToolAction || !m_windowLevelPresetComboBox || !m_view)
     {
         return;
     }
 
-    m_windowLevelSlider->blockSignals(true);
-    m_windowWidthSlider->blockSignals(true);
+    const bool hasImage = m_viewportController && m_viewportController->currentImage();
+    if (!hasImage)
+    {
+        m_windowLevelToolAction->blockSignals(true);
+        m_windowLevelToolAction->setChecked(false);
+        m_windowLevelToolAction->blockSignals(false);
+        m_zoomToolAction->blockSignals(true);
+        m_zoomToolAction->setChecked(false);
+        m_zoomToolAction->blockSignals(false);
+        setViewerInteractionMode(false, false);
+    }
+    m_windowLevelToolAction->setEnabled(hasImage);
+    m_zoomToolAction->setEnabled(hasImage);
+    m_windowLevelPresetComboBox->setEnabled(hasImage);
 
-    m_windowLevelSlider->setRange(state.levelMin, state.levelMax);
-    m_windowWidthSlider->setRange(state.widthMin, state.widthMax);
-    m_windowLevelSlider->setValue(state.level);
-    m_windowWidthSlider->setValue(state.width);
-    m_windowLevelSlider->blockSignals(false);
-    m_windowWidthSlider->blockSignals(false);
-
-    if (m_windowLevelValueLabel)
-    {
-        m_windowLevelValueLabel->setText(QString::number(state.level));
-    }
-    if (m_windowWidthValueLabel)
-    {
-        m_windowWidthValueLabel->setText(QString::number(state.width));
-    }
-    if (m_presetComboBox)
-    {
-        m_presetComboBox->blockSignals(true);
-        m_presetComboBox->setCurrentIndex(state.presetIndex);
-        m_presetComboBox->blockSignals(false);
-    }
-    if (m_autoWindowPresetComboBox)
-    {
-        m_autoWindowPresetComboBox->blockSignals(true);
-        m_autoWindowPresetComboBox->setCurrentIndex(state.autoWindowPresetIndex);
-        m_autoWindowPresetComboBox->blockSignals(false);
-    }
+    const int presetValue = static_cast<int>(hasImage ? m_viewportController->currentPreset() : ViewportWindowPreset::Custom);
+    const int comboIndex = std::max(0, m_windowLevelPresetComboBox->findData(presetValue));
+    m_windowLevelPresetComboBox->blockSignals(true);
+    m_windowLevelPresetComboBox->setCurrentIndex(comboIndex);
+    m_windowLevelPresetComboBox->blockSignals(false);
 }
 
 void DicomMainWindow::applyImageAdjustments()
@@ -1904,188 +1437,36 @@ void DicomMainWindow::applyImageAdjustments()
     if (!m_viewportController)
     {
         m_view->clearImage();
+        syncViewerToolbarState();
         return;
     }
 
     const int windowLevel = m_viewportController->currentWindowLevel();
     const int windowWidth = m_viewportController->currentWindowWidth();
+    m_view->setWindowLevelWidth(windowLevel, windowWidth);
 
-    if (m_windowLevelValueLabel)
+    const DicomImage* currentImage = m_viewportController->currentImage();
+    if (!currentImage)
     {
-        m_windowLevelValueLabel->setText(QString::number(windowLevel));
+        m_view->clearImage();
+        syncViewerToolbarState();
+        return;
     }
-    if (m_windowWidthValueLabel)
+
+    if (currentImage->hasRawPixels())
     {
-        m_windowWidthValueLabel->setText(QString::number(windowWidth));
+        displayImageInViewer(*currentImage, windowLevel, windowWidth);
+        syncViewerToolbarState();
+        return;
     }
 
     auto diagnosticImageModel = m_viewportController->renderCurrentDiagnosticImage();
     if (!diagnosticImageModel)
     {
         m_view->clearImage();
+        syncViewerToolbarState();
         return;
     }
-    m_view->setImage(diagnosticImageModel);
-}
-
-void DicomMainWindow::onToolChanged(DicomGraphicsView::ToolMode toolMode)
-{
-    if (!m_view)
-    {
-        return;
-    }
-
-    if (m_viewportController)
-    {
-        m_viewportController->setToolIndex(MeasurementController::toolIndexForMode(toolMode));
-    }
-
-    m_view->setToolMode(toolMode);
-    if (toolMode == DicomGraphicsView::ToolMode::Pan)
-    {
-        statusBar()->clearMessage();
-    }
-}
-
-void DicomMainWindow::onWindowLevelChanged(int value)
-{
-    m_viewportController->setWindowLevel(value);
-    if (m_presetComboBox && m_presetComboBox->currentIndex() != 0)
-    {
-        m_viewportController->resetPreset();
-        m_presetComboBox->setCurrentIndex(0);
-    }
-    if (m_autoWindowPresetComboBox && m_autoWindowPresetComboBox->currentIndex() != 0)
-    {
-        m_viewportController->resetAutoWindowPreset();
-        m_autoWindowPresetComboBox->setCurrentIndex(0);
-    }
-    applyImageAdjustments();
-}
-
-void DicomMainWindow::onWindowWidthChanged(int value)
-{
-    m_viewportController->setWindowWidth(value);
-    if (m_presetComboBox && m_presetComboBox->currentIndex() != 0)
-    {
-        m_viewportController->resetPreset();
-        m_presetComboBox->setCurrentIndex(0);
-    }
-    if (m_autoWindowPresetComboBox && m_autoWindowPresetComboBox->currentIndex() != 0)
-    {
-        m_viewportController->resetAutoWindowPreset();
-        m_autoWindowPresetComboBox->setCurrentIndex(0);
-    }
-    applyImageAdjustments();
-}
-
-void DicomMainWindow::onPresetChanged(int index)
-{
-    if (!m_windowLevelSlider || !m_windowWidthSlider)
-    {
-        return;
-    }
-
-    if (!m_viewportController || !m_viewportController->currentImage() ||
-        !m_viewportController->currentImage()->hasRawPixels())
-    {
-        return;
-    }
-    if (!m_viewportController->applyPreset(index))
-    {
-        return;
-    }
-
-    m_windowLevelSlider->blockSignals(true);
-    m_windowWidthSlider->blockSignals(true);
-    m_windowLevelSlider->setValue(m_viewportController->currentWindowLevel());
-    m_windowWidthSlider->setValue(m_viewportController->currentWindowWidth());
-    m_windowLevelSlider->blockSignals(false);
-    m_windowWidthSlider->blockSignals(false);
-    if (m_autoWindowPresetComboBox && m_autoWindowPresetComboBox->currentIndex() != 0)
-    {
-        m_viewportController->resetAutoWindowPreset();
-        m_autoWindowPresetComboBox->blockSignals(true);
-        m_autoWindowPresetComboBox->setCurrentIndex(0);
-        m_autoWindowPresetComboBox->blockSignals(false);
-    }
-    applyImageAdjustments();
-}
-
-void DicomMainWindow::onAutoWindowPresetChanged(int index)
-{
-    if (!m_viewportController || !m_windowLevelSlider || !m_windowWidthSlider)
-    {
-        return;
-    }
-
-    if (index == 0)
-    {
-        m_viewportController->resetAutoWindowPreset();
-        return;
-    }
-
-    if (!m_viewportController->applyAutoWindowPreset(index))
-    {
-        return;
-    }
-
-    if (m_presetComboBox)
-    {
-        m_presetComboBox->blockSignals(true);
-        m_presetComboBox->setCurrentIndex(0);
-        m_presetComboBox->blockSignals(false);
-    }
-
-    m_windowLevelSlider->blockSignals(true);
-    m_windowWidthSlider->blockSignals(true);
-    m_windowLevelSlider->setValue(m_viewportController->currentWindowLevel());
-    m_windowWidthSlider->setValue(m_viewportController->currentWindowWidth());
-    m_windowLevelSlider->blockSignals(false);
-    m_windowWidthSlider->blockSignals(false);
-    applyImageAdjustments();
-}
-
-void DicomMainWindow::onDistanceMeasurementRequested(const QPoint& startPixel, const QPoint& endPixel)
-{
-    if (!m_viewportController || !m_viewportController->currentImage() ||
-        !m_viewportController->currentImage()->hasRawPixels() || !m_view)
-    {
-        return;
-    }
-
-    const auto result = m_measurementController.createDistanceResult(
-        *m_viewportController->currentImage(),
-        startPixel,
-        endPixel);
-    m_view->showDistanceMeasurement(result.startScenePos, result.endScenePos, result.label);
-    statusBar()->showMessage("Distance: " + result.label, 5000);
-}
-
-void DicomMainWindow::onPixelProbeRequested(const QPoint& pixelPos)
-{
-    if (!m_viewportController || !m_viewportController->currentImage() ||
-        !m_viewportController->currentImage()->hasRawPixels() || !m_view)
-    {
-        return;
-    }
-
-    const auto result = m_measurementController.createProbeResult(
-        *m_viewportController->currentImage(),
-        m_viewportController->currentSeries().get(),
-        pixelPos);
-    m_view->showPixelProbe(result.scenePos, result.label);
-    statusBar()->showMessage("Pixel Probe: " + result.label, 5000);
-}
-
-void DicomMainWindow::onAngleMeasurementRequested(const QPoint& startPixel, const QPoint& vertexPixel, const QPoint& endPixel)
-{
-    if (!m_view)
-    {
-        return;
-    }
-
-    const auto result = m_measurementController.createAngleResult(startPixel, vertexPixel, endPixel);
-    m_view->showAngleMeasurement(result.startScenePos, result.vertexScenePos, result.endScenePos, result.label);
-    statusBar()->showMessage("Angle: " + result.label, 5000);
+    displayImageInViewer(diagnosticImageModel);
+    syncViewerToolbarState();
 }

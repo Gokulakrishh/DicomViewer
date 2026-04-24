@@ -4,23 +4,18 @@
 #include <QtConcurrent/QtConcurrent>
 #include <algorithm>
 
-#include "DicomRenderService.h"
 #include "FileHandling/FileHandling.h"
 #include "FileHandling/GDCMFileHandling.h"
 #include "Model/DicomImage.h"
 #include "Model/MedicalImage.h"
 #include "Model/DicomParameters.h"
-#include "Services/WindowingAnalysisService.h"
+#include "Utilities/DiagnosticImageRenderer.h"
 
 DicomViewportController::DicomViewportController(
     FileHandling* fileHandling,
-    const DicomRenderService* renderService,
-    const WindowingAnalysisService* windowingAnalysisService,
     QObject* parent)
     : QObject(parent),
-      m_fileHandling(fileHandling),
-      m_renderService(renderService),
-      m_windowingAnalysisService(windowingAnalysisService)
+      m_fileHandling(fileHandling)
 {
 }
 
@@ -34,16 +29,13 @@ void DicomViewportController::clear()
     ++m_session.seriesGeneration;
     cancelPendingPreloads();
     m_session.clear();
+    m_rawPixelEvictionSuspended = false;
 }
 
 bool DicomViewportController::ensureImageLoaded(DicomImage& image)
 {
     if (image.hasRawPixels())
     {
-        if (image.pixmap().isNull() && m_renderService)
-        {
-            m_renderService->ensureDiagnosticPixmap(image);
-        }
         return true;
     }
 
@@ -68,10 +60,6 @@ bool DicomViewportController::ensureImageLoaded(DicomImage& image)
     if (auto* loadedDicomImage = dynamic_cast<DicomImage*>(loadedImage.get()))
     {
         image = *loadedDicomImage;
-        if (image.hasRawPixels() && image.pixmap().isNull() && m_renderService)
-        {
-            m_renderService->ensureDiagnosticPixmap(image);
-        }
         return image.isValid();
     }
 
@@ -88,8 +76,7 @@ void DicomViewportController::setSeries(const std::shared_ptr<Series>& series, i
     const int count = imageCount();
     m_session.currentImageIndex = count > 0 ? std::clamp(initialIndex, 0, count - 1) : -1;
     m_session.windowStateInitialized = false;
-    m_session.currentPresetIndex = 0;
-    m_session.currentAutoWindowPresetIndex = 0;
+    m_session.currentPreset = ViewportWindowPreset::Custom;
     m_session.cinePlaying = false;
 }
 
@@ -101,8 +88,7 @@ void DicomViewportController::setSingleImage(const std::shared_ptr<DicomImage>& 
     m_session.singleImage = image;
     m_session.currentImageIndex = -1;
     m_session.windowStateInitialized = false;
-    m_session.currentPresetIndex = 0;
-    m_session.currentAutoWindowPresetIndex = 0;
+    m_session.currentPreset = ViewportWindowPreset::Custom;
     m_session.cinePlaying = false;
 }
 
@@ -156,6 +142,7 @@ int DicomViewportController::currentImageIndex() const
 void DicomViewportController::setCurrentImageIndex(int index)
 {
     m_session.currentImageIndex = index;
+    enforceRawPixelCache();
 }
 
 int DicomViewportController::clampedIndexWithStep(int stepCount) const
@@ -231,8 +218,7 @@ DicomViewportController::WindowControlState DicomViewportController::windowContr
         {
             m_session.currentWindowLevel = displayedImage->defaultWindowLevel();
             m_session.currentWindowWidth = std::max(1, displayedImage->defaultWindowWidth());
-            m_session.currentPresetIndex = 0;
-            m_session.currentAutoWindowPresetIndex = 0;
+            m_session.currentPreset = ViewportWindowPreset::Custom;
             m_session.windowStateInitialized = true;
         }
         else
@@ -251,16 +237,14 @@ DicomViewportController::WindowControlState DicomViewportController::windowContr
         {
             m_session.currentWindowLevel = 0;
             m_session.currentWindowWidth = 100;
-            m_session.currentPresetIndex = 0;
-            m_session.currentAutoWindowPresetIndex = 0;
+            m_session.currentPreset = ViewportWindowPreset::Custom;
             m_session.windowStateInitialized = true;
         }
     }
 
     state.level = m_session.currentWindowLevel;
     state.width = m_session.currentWindowWidth;
-    state.presetIndex = m_session.currentPresetIndex;
-    state.autoWindowPresetIndex = m_session.currentAutoWindowPresetIndex;
+    state.preset = m_session.currentPreset;
     return state;
 }
 
@@ -273,13 +257,12 @@ std::shared_ptr<DicomImage> DicomViewportController::renderCurrentDiagnosticImag
     }
 
     auto diagnosticImageModel = std::make_shared<DicomImage>(*displayedImage);
-    if (m_renderService)
+    if (displayedImage->hasRawPixels() && displayedImage->isMonochrome())
     {
-        return m_renderService->renderDiagnosticImage(
+        return renderDiagnosticImage(
             *displayedImage,
-            DicomRenderService::RenderSettings{
-                m_session.currentWindowLevel,
-                m_session.currentWindowWidth});
+            m_session.currentWindowLevel,
+            m_session.currentWindowWidth);
     }
 
     return diagnosticImageModel;
@@ -305,22 +288,17 @@ int DicomViewportController::currentWindowWidth() const
     return m_session.currentWindowWidth;
 }
 
-int DicomViewportController::currentPresetIndex() const
+ViewportWindowPreset DicomViewportController::currentPreset() const
 {
-    return m_session.currentPresetIndex;
-}
-
-int DicomViewportController::currentAutoWindowPresetIndex() const
-{
-    return m_session.currentAutoWindowPresetIndex;
+    return m_session.currentPreset;
 }
 
 void DicomViewportController::resetPreset()
 {
-    m_session.currentPresetIndex = 0;
+    m_session.currentPreset = ViewportWindowPreset::Custom;
 }
 
-bool DicomViewportController::applyPreset(int index)
+bool DicomViewportController::applyPreset(ViewportWindowPreset preset)
 {
     const DicomImage* displayedImage = currentImage();
     if (!displayedImage || !displayedImage->hasRawPixels())
@@ -340,19 +318,19 @@ bool DicomViewportController::applyPreset(int index)
     PresetValues presetValues{
         displayedImage->defaultWindowLevel(),
         displayedImage->defaultWindowWidth()};
-    switch (index)
+    switch (preset)
     {
-    case 1:
-        presetValues = {300, 1500};
-        break;
-    case 2:
-        presetValues = {-500, 1500};
-        break;
-    case 3:
+    case ViewportWindowPreset::Brain:
         presetValues = {40, 80};
         break;
-    case 4:
-        presetValues = {50, 400};
+    case ViewportWindowPreset::SoftTissue:
+        presetValues = {50, 350};
+        break;
+    case ViewportWindowPreset::Bone:
+        presetValues = {400, 1800};
+        break;
+    case ViewportWindowPreset::Lung:
+        presetValues = {-600, 1400};
         break;
     default:
         return false;
@@ -360,49 +338,8 @@ bool DicomViewportController::applyPreset(int index)
 
     m_session.currentWindowLevel = std::clamp(presetValues.level, minimumValue, maximumValue);
     m_session.currentWindowWidth = std::clamp(presetValues.width, 1, std::max(1, maximumValue - minimumValue));
-    m_session.currentPresetIndex = index;
-    m_session.currentAutoWindowPresetIndex = 0;
+    m_session.currentPreset = preset;
     return true;
-}
-
-void DicomViewportController::resetAutoWindowPreset()
-{
-    m_session.currentAutoWindowPresetIndex = 0;
-}
-
-bool DicomViewportController::applyAutoWindowPreset(int index)
-{
-    const DicomImage* displayedImage = currentImage();
-    if (!displayedImage || !displayedImage->hasRawPixels() || !m_windowingAnalysisService)
-    {
-        return false;
-    }
-
-    const auto result = m_windowingAnalysisService->analyzePreset(
-        *displayedImage,
-        static_cast<WindowingAnalysisService::Preset>(index));
-    if (!result.valid)
-    {
-        return false;
-    }
-
-    const int minimumValue = displayedImage->minimumStoredValue();
-    const int maximumValue = displayedImage->maximumStoredValue();
-    m_session.currentWindowLevel = std::clamp(result.windowLevel, minimumValue, maximumValue);
-    m_session.currentWindowWidth = std::clamp(result.windowWidth, 1, std::max(1, maximumValue - minimumValue));
-    m_session.currentAutoWindowPresetIndex = index;
-    m_session.currentPresetIndex = 0;
-    return true;
-}
-
-void DicomViewportController::setToolIndex(int index)
-{
-    m_session.toolIndex = index;
-}
-
-int DicomViewportController::toolIndex() const
-{
-    return m_session.toolIndex;
 }
 
 void DicomViewportController::setCinePlaying(bool playing)
@@ -418,6 +355,15 @@ bool DicomViewportController::isCinePlaying() const
 const ViewportSession& DicomViewportController::session() const
 {
     return m_session;
+}
+
+void DicomViewportController::suspendRawPixelEviction(bool suspended)
+{
+    m_rawPixelEvictionSuspended = suspended;
+    if (!m_rawPixelEvictionSuspended)
+    {
+        enforceRawPixelCache();
+    }
 }
 
 void DicomViewportController::cancelPendingPreloads()
@@ -458,6 +404,8 @@ void DicomViewportController::applyPreloadedSlice(int index, int generation, con
     {
         targetImage = *loadedImage;
     }
+
+    enforceRawPixelCache();
 }
 
 void DicomViewportController::requestSlicePreload(int index)
@@ -517,7 +465,7 @@ void DicomViewportController::scheduleSlicePreload(bool cinePlaying)
         return;
     }
 
-    const int forwardCount = cinePlaying ? 12 : 10;
+    const int forwardCount = cinePlaying ? kRawPixelCacheRadius : kRawPixelCacheRadius;
     const int backwardCount = cinePlaying ? 0 : 3;
 
     for (int offset = 1; offset <= forwardCount; ++offset)
@@ -528,5 +476,40 @@ void DicomViewportController::scheduleSlicePreload(bool cinePlaying)
     for (int offset = 1; offset <= backwardCount; ++offset)
     {
         requestSlicePreload(m_session.currentImageIndex - offset);
+    }
+}
+
+void DicomViewportController::enforceRawPixelCache()
+{
+    if (m_rawPixelEvictionSuspended || !m_session.currentSeries)
+    {
+        return;
+    }
+
+    auto& images = m_session.currentSeries->images();
+    if (images.empty() || m_session.currentImageIndex < 0)
+    {
+        return;
+    }
+
+    for (int index = 0; index < static_cast<int>(images.size()); ++index)
+    {
+        if (m_pendingPreloadIndices.contains(index))
+        {
+            continue;
+        }
+
+        auto& image = images[static_cast<std::size_t>(index)];
+        if (!image || !image->hasRawPixels())
+        {
+            continue;
+        }
+
+        if (std::abs(index - m_session.currentImageIndex) <= kRawPixelCacheRadius)
+        {
+            continue;
+        }
+
+        image->clearRawPixels();
     }
 }

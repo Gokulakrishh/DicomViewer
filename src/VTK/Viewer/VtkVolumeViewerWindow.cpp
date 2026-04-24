@@ -10,7 +10,6 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QSlider>
-#include <QSurfaceFormat>
 #include <QVBoxLayout>
 #include <QWidget>
 #include <QVTKOpenGLNativeWidget.h>
@@ -111,7 +110,6 @@ void VtkVolumeViewerWindow::setupUi()
     topBarLayout->addStretch();
     rootLayout->addWidget(topBar);
 
-    QSurfaceFormat::setDefaultFormat(QVTKOpenGLNativeWidget::defaultFormat());
     m_vtkWidget = new QVTKOpenGLNativeWidget(centralWidget);
     m_vtkWidget->installEventFilter(this);
     rootLayout->addWidget(m_vtkWidget, 1);
@@ -145,8 +143,10 @@ void VtkVolumeViewerWindow::setupRenderer()
 
     const VolumeRenderPreprocessingService preprocessingService;
     const PreparedVolumeRenderInputs preparedInputs = preprocessingService.prepare(m_diagnosticVolume);
-    m_baseVolumeData = VtkVolumeAdapter::createImageData(*preparedInputs.baseVolume);
-    m_boneFocusedVolumeData = VtkVolumeAdapter::createImageData(*preparedInputs.boneFocusedVolume);
+    m_baseVolumeSource = preparedInputs.baseVolume;
+    m_boneFocusedVolumeSource = preparedInputs.boneFocusedVolume;
+    m_baseVolumeData = VtkVolumeAdapter::createImageData(*m_baseVolumeSource);
+    m_boneFocusedVolumeData = VtkVolumeAdapter::createImageData(*m_boneFocusedVolumeSource);
 
     m_volumeMapper = vtkSmartPointer<vtkSmartVolumeMapper>::New();
     m_volumeMapper->SetRequestedRenderModeToGPU();

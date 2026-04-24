@@ -1,20 +1,35 @@
 #include "Services/SeriesDataLoadService.h"
 
+#include "Errors/AppError.h"
 #include "FileHandling/FileHandling.h"
 #include "Model/DicomImage.h"
 
-#include <stdexcept>
+namespace
+{
+AppError makeSeriesLoadError(ErrorCode code, const QString& technicalMessage, const QString& userMessage)
+{
+    return AppError{
+        code,
+        ErrorSeverity::Recoverable,
+        "Series Loading",
+        technicalMessage,
+        userMessage};
+}
+}
 
 SeriesDataLoadService::SeriesDataLoadService(const FileHandling& fileHandling)
     : m_fileHandling(fileHandling)
 {
 }
 
-Series SeriesDataLoadService::loadDiagnosticSeries(const Series& lightweightSeries) const
+AppResult<Series> SeriesDataLoadService::loadDiagnosticSeries(const Series& lightweightSeries) const
 {
     if (lightweightSeries.images().empty())
     {
-        throw std::runtime_error("Series does not contain any image references to reload");
+        return makeSeriesLoadError(
+            ErrorCode::SeriesLoadMissingImageReference,
+            "Series does not contain any image references to reload",
+            "The selected series does not contain any image references to reload.");
     }
 
     Series diagnosticSeries;
@@ -25,19 +40,28 @@ Series SeriesDataLoadService::loadDiagnosticSeries(const Series& lightweightSeri
     {
         if (!imagePtr)
         {
-            throw std::runtime_error("Series contains a null image reference");
+            return makeSeriesLoadError(
+                ErrorCode::SeriesLoadNullImageReference,
+                "Series contains a null image reference",
+                "The selected series contains an invalid image reference.");
         }
 
         const QString filePath = imagePtr->filePath().trimmed();
         if (filePath.isEmpty())
         {
-            throw std::runtime_error("Series contains an image without a source file path");
+            return makeSeriesLoadError(
+                ErrorCode::SeriesLoadMissingFilePath,
+                "Series contains an image without a source file path",
+                "The selected series contains an image without a valid source file path.");
         }
 
         std::unique_ptr<DicomImage> loadedImage = m_fileHandling.loadImageData(filePath);
         if (!loadedImage)
         {
-            throw std::runtime_error("Failed to reload full image data for series reconstruction");
+            return makeSeriesLoadError(
+                ErrorCode::SeriesLoadReloadFailed,
+                "Failed to reload full image data for series reconstruction",
+                "Failed to reload full image data for the selected series.");
         }
 
         diagnosticSeries.addImage(std::move(loadedImage));

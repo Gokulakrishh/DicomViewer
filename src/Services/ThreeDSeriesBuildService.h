@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Errors/AppResult.h"
 #include "Services/ThreeDimensionalPipelineResult.h"
 #include "Utilities/VolumeValidationSettings.h"
 
@@ -11,7 +12,7 @@ class ThreeDSeriesBuildService
 public:
     explicit ThreeDSeriesBuildService(VolumeValidationSettings validationSettings = {});
 
-    [[nodiscard]] ThreeDimensionalPipelineResult buildFromDiagnosticSeries(
+    [[nodiscard]] AppResult<ThreeDimensionalPipelineResult> buildFromDiagnosticSeries(
         const Series& diagnosticSeries,
         const I3dPipelineProfile& profile) const;
 

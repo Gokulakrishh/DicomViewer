@@ -1,7 +1,7 @@
 #include "WidgetsAdvancedViewerLauncher.h"
 
-#include "MprViewerWindow.h"
 #if defined(DICOMVIEWER_ENABLE_VTK)
+#include "VTK/MPR/Window/VtkMprViewerWindow.h"
 #include "VTK/Viewer/VtkVolumeViewerWindow.h"
 #elif defined(DICOMVIEWER_ENABLE_QML3D)
 #include "ThreeDViewerWindow.h"
@@ -14,13 +14,22 @@ QWidget* WidgetsAdvancedViewerLauncher::showMprVolume(
     int windowWidth,
     QWidget* parent)
 {
-    auto* viewer = new MprViewerWindow(std::move(volume), windowLevel, windowWidth, parent);
+#if defined(DICOMVIEWER_ENABLE_VTK)
+    auto* viewer = new VtkMprViewerWindow(std::move(volume), windowLevel, windowWidth, parent);
     viewer->setAttribute(Qt::WA_DeleteOnClose);
     viewer->setWindowTitle(title);
     viewer->show();
     viewer->raise();
     viewer->activateWindow();
     return viewer;
+#else
+    Q_UNUSED(volume);
+    Q_UNUSED(title);
+    Q_UNUSED(windowLevel);
+    Q_UNUSED(windowWidth);
+    Q_UNUSED(parent);
+    return nullptr;
+#endif
 }
 
 QWidget* WidgetsAdvancedViewerLauncher::showThreeDVolume(

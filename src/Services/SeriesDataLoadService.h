@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Errors/AppResult.h"
 #include "Model/DicomParameters.h"
 
 class FileHandling;
@@ -10,7 +11,7 @@ class SeriesDataLoadService
 public:
     explicit SeriesDataLoadService(const FileHandling& fileHandling);
 
-    [[nodiscard]] Series loadDiagnosticSeries(const Series& lightweightSeries) const;
+    [[nodiscard]] AppResult<Series> loadDiagnosticSeries(const Series& lightweightSeries) const;
     [[nodiscard]] bool isDiagnosticSeriesLoaded(const Series& series) const;
 
 private:

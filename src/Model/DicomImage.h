@@ -3,7 +3,8 @@
 #include "MedicalImage.h"
 
 #include <array>
-#include <QVector>
+#include <cstdint>
+#include <vector>
 
 class DicomImage : public MedicalImage
 {
@@ -35,13 +36,15 @@ public:
     double sliceThickness() const;
     double spacingBetweenSlices() const;
     int rawPixelValueAt(int x, int y) const;
+    std::size_t rawPixelByteCount() const;
 
     void setPixmap(const QPixmap& pixmap);
     void setFilePath(const QString& filePath);
     void setSopInstanceUid(const QString& sopInstanceUid);
     void setInstanceNumber(const QString& instanceNumber);
     void setDimensions(int width, int height);
-    void setRawPixels(const QVector<int>& rawPixels);
+    void setRawPixels(const std::vector<int16_t>& rawPixels);
+    void clearRawPixels();
     void setMonochrome(bool isMonochrome);
     void setMonochrome1(bool isMonochrome1);
     void setValueRange(int minimumStoredValue, int maximumStoredValue);
@@ -58,7 +61,7 @@ private:
     QString m_instanceNumber;
     int m_width{0};
     int m_height{0};
-    QVector<int> m_rawPixels;
+    std::vector<int16_t> m_rawPixels;
     bool m_isMonochrome{false};
     bool m_isMonochrome1{false};
     int m_minimumStoredValue{0};
