@@ -3,7 +3,7 @@
 #include "Services/ThreeDProfiles/ThreeDProfileSelection.h"
 
 #include <QString>
-
+#include <QWidget> 
 #include <memory>
 
 class IVolumeData;

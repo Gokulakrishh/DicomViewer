@@ -3,6 +3,7 @@
 #include "IAdvancedViewerLauncher.h"
 
 #include <memory>
+#include <QWidget> 
 
 class WidgetsAdvancedViewerLauncher final : public IAdvancedViewerLauncher
 {

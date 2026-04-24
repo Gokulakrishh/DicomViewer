@@ -1,4 +1,5 @@
 #include "WidgetsAdvancedViewerLauncher.h"
+#include <QWidget> 
 
 #if defined(DICOMVIEWER_ENABLE_VTK)
 #include "VTK/MPR/Window/VtkMprViewerWindow.h"
