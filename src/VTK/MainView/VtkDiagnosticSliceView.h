@@ -23,7 +23,7 @@ public:
 
     void setImage(std::shared_ptr<MedicalImage> image, bool resetCamera = true);
     void setDicomImage(const DicomImage& image, int windowLevel, int windowWidth, bool resetCamera = true);
-    //void clearImage();
+    void clearImage();
     void setSliceNavigationState(int currentIndex, int totalCount);
     void setCineAvailable(bool available);
     void setCinePlaying(bool playing);
