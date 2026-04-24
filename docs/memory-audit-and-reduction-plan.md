@@ -6,29 +6,42 @@ Resolved items are intentionally omitted.
 
 ## Current Measured State
 
-Measured on the `VTK` build while one study was open in MPR:
+Measured on the `VTK` build after the recent memory cleanup:
 
-- process: [DicomViewer.app](/Users/goku/Documents/DicomViewer/build/DicomViewer.app)
-- resident memory `RSS`: about `855,652 KB` (`~836 MiB`)
-- virtual memory `VSZ`: about `36,117,420 KB` (`~34.4 GiB`)
+- main viewer only, bounded raw-slice cache active:
+  - resident memory `RSS`: about `269,012 KB` (`~262.7 MiB`)
+  - debug snapshot example:
+    - `loadedSlices=20`
+    - `rawSliceBytes=10.00 MiB`
+    - `previewCount=1`
+    - `previewBytes=1.00 MiB`
+    - `vtkSliceBytes=512.00 KiB`
+
+- one study open in MPR:
+  - resident memory `RSS`: about `461,056 KB` (`~450.3 MiB`)
 
 `RSS` is the metric that matters for RAM pressure.
 
 ## Remaining Problems
 
-### 1. Slice objects and built volume coexist
+### 1. Slice objects and built volume can still coexist
 
 The app still keeps both:
 
-- slice-level `DicomImage` objects with raw pixels
+- slice-level `DicomImage` objects with raw pixels in the main viewer cache
 - a contiguous `VolumeData<int16_t>` built for MPR / 3D
 
-This is not inherently wrong, but it is still the main source of duplicate image ownership.
+This is reduced compared with the old design because:
+
+- the main viewer now uses a bounded raw-slice cache
+- MPR / 3D now load through `AdvancedSeriesVolumeService`
+
+It is still a real duplicate-memory condition while advanced viewers are open.
 
 Relevant code:
 
 - [DicomViewportController.cpp](/Users/goku/Documents/DicomViewer/src/DicomViewerWindow/DicomViewportController.cpp)
-- [DicomMainWindow.cpp](/Users/goku/Documents/DicomViewer/src/DicomViewerWindow/DicomMainWindow.cpp)
+- [AdvancedSeriesVolumeService.cpp](/Users/goku/Documents/DicomViewer/src/Services/AdvancedSeriesVolumeService.cpp)
 - [VolumeBuilder.cpp](/Users/goku/Documents/DicomViewer/src/Services/VolumeBuilder.cpp)
 
 ### 2. `VolumeBuilder` creates a full contiguous volume buffer
@@ -95,6 +108,7 @@ These are no longer active problems:
 - `DicomImage` raw storage as `QVector<int>`
 - wasteful per-slice DICOM pixmap retention for the normal monochrome DICOM path
 - deep VTK full-volume copy for the standard `VolumeData<int16_t>` import path
+- main-window forced full-series raw loading for MPR launch
 
 ## Current Priority Order
 
@@ -102,7 +116,7 @@ If memory work continues, the next priorities should be:
 
 1. reduce simultaneous lifetime of slice raw buffers and built volume buffers
 2. review whether the derived `boneFocusedVolume` can be made cheaper or more lazy
-3. decide whether slice raw buffers can be evicted after volume build when safe
+3. evaluate whether the current-slice VTK copy in the main 2D viewer is worth optimizing
 4. add explicit instrumentation for:
    - loaded slice count
    - slice raw bytes

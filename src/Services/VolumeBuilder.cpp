@@ -373,13 +373,13 @@ AppResult<std::shared_ptr<IVolumeData>> VolumeBuilder::buildFromDiagnosticSeries
 
         const DicomImage* firstOrderedImage = input.orderedImages.empty() ? nullptr : input.orderedImages.front();
         const DicomImage* lastOrderedImage = input.orderedImages.empty() ? nullptr : input.orderedImages.back();
-        qDebug().nospace()
+        /*qDebug().nospace()
             << "VolumeBuilder ordered input:"
             << " count=" << input.orderedImages.size()
             << " dims=(" << input.width << ", " << input.height << ", " << input.depth << ")"
             << " basis.row=(" << basis.row[0] << ", " << basis.row[1] << ", " << basis.row[2] << ")"
             << " basis.column=(" << basis.column[0] << ", " << basis.column[1] << ", " << basis.column[2] << ")"
-            << " basis.normal=(" << basis.normal[0] << ", " << basis.normal[1] << ", " << basis.normal[2] << ")";
+            << " basis.normal=(" << basis.normal[0] << ", " << basis.normal[1] << ", " << basis.normal[2] << ")";*/
 
         if (firstOrderedImage && lastOrderedImage &&
             firstOrderedImage->hasImagePositionPatient() &&
@@ -387,17 +387,17 @@ AppResult<std::shared_ptr<IVolumeData>> VolumeBuilder::buildFromDiagnosticSeries
         {
             const auto& firstPosition = firstOrderedImage->imagePositionPatient();
             const auto& lastPosition = lastOrderedImage->imagePositionPatient();
-            qDebug().nospace()
+            /*qDebug().nospace()
                 << "VolumeBuilder ordered positions:"
                 << " first=(" << firstPosition[0] << ", " << firstPosition[1] << ", " << firstPosition[2] << ")"
                 << " last=(" << lastPosition[0] << ", " << lastPosition[1] << ", " << lastPosition[2] << ")"
                 << " firstCoord=" << sliceCoordinate(*firstOrderedImage, basis)
-                << " lastCoord=" << sliceCoordinate(*lastOrderedImage, basis);
+                << " lastCoord=" << sliceCoordinate(*lastOrderedImage, basis);*/
         }
 
         validateSliceGeometry(input, basis, m_validationSettings);
         VolumeGeometry geometry = buildGeometry(input, basis);
-        qDebug().nospace()
+        /*qDebug().nospace()
             << "VolumeBuilder output geometry:"
             << " dims=(" << geometry.dimensions.x << ", " << geometry.dimensions.y << ", " << geometry.dimensions.z << ")"
             << " spacing=(" << geometry.spacing.x << ", " << geometry.spacing.y << ", " << geometry.spacing.z << ")"
@@ -405,7 +405,7 @@ AppResult<std::shared_ptr<IVolumeData>> VolumeBuilder::buildFromDiagnosticSeries
             << " direction=["
             << geometry.direction[0] << ", " << geometry.direction[1] << ", " << geometry.direction[2] << "; "
             << geometry.direction[3] << ", " << geometry.direction[4] << ", " << geometry.direction[5] << "; "
-            << geometry.direction[6] << ", " << geometry.direction[7] << ", " << geometry.direction[8] << "]";
+            << geometry.direction[6] << ", " << geometry.direction[7] << ", " << geometry.direction[8] << "]";*/
         std::vector<int16_t> voxels = buildVoxelBuffer(input);
 
         return std::make_shared<VolumeData<int16_t>>(std::move(geometry), std::move(voxels));

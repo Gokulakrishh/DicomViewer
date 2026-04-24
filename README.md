@@ -1,15 +1,15 @@
 # DicomViewer
 
-`DicomViewer` is a `Qt 6` / `C++20` desktop application for browsing and viewing DICOM studies with PostgreSQL-backed hierarchy indexing, VTK-based MPR, measurement tools, and an optional AI assistant. The current codebase is a professional-grade desktop viewer foundation aimed at scaling to larger datasets and richer clinical-style workflows.
+`DicomViewer` is a `Qt 6` / `C++20` desktop application for browsing and viewing DICOM studies with PostgreSQL-backed hierarchy indexing, a VTK-based main viewer, VTK-based MPR, and an optional AI assistant. The current codebase is a professional-grade desktop viewer foundation aimed at scaling to larger datasets and richer clinical-style workflows.
 
 ## Features
 
 - DICOM import with `GDCM`
 - PostgreSQL-backed `Patient -> Study -> Series -> DicomImage` hierarchy
 - Incremental Hierarchy Loading for large datasets
-- one cached preview image per series
 - raw grayscale rendering with true `WL/WW`
-- slice scrolling, cine playback, and overlay measurement tools
+- slice scrolling and cine playback
+- VTK main diagnostic viewer with in-view metadata and status overlays
 - VTK MPR viewer with synchronized axial / coronal / sagittal panes and a 3D reference pane
 - optional AI Q&A dock with user-provided API key
 
@@ -47,6 +47,7 @@ You need:
   - `Sql`
   - `Concurrent`
   - `Network`
+- `VTK` with Qt support
 - `GDCM`
 - `OpenCV >= 4.6`
 - PostgreSQL client libraries
@@ -93,28 +94,6 @@ cmake -S . -B build -DCMAKE_PREFIX_PATH=/path/to/Qt/6.x.x
 cmake --build build -j4
 ```
 
-Notes:
-
-- `VTK` is now the default build path
-- `build/` is the official local build directory
-- if you explicitly need a non-VTK build, configure with:
-
-```bash
-cmake -S . -B build-novtk -DCMAKE_PREFIX_PATH=/path/to/Qt/6.x.x -DDICOMVIEWER_ENABLE_VTK=OFF
-cmake --build build-novtk -j4
-```
-
-### 4. Run
-
-On macOS:
-
-```bash
-./build/DicomViewer.app/Contents/MacOS/DicomViewer
-```
-
-If you prefer launching the app bundle directly:
-
-
 ## First Run
 
 After launch:
@@ -122,7 +101,7 @@ After launch:
 1. Open a DICOM folder.
 2. Let the app import the folder into PostgreSQL.
 3. Browse patients, studies, and series from the left tree.
-4. Select a series to load raw image data into the main viewer.
+4. Select a series to load it into the VTK main viewer.
 5. Use `Open MPR` for VTK-based multi-planar reconstruction on multi-slice series.
 
 
@@ -136,4 +115,4 @@ The current build is already usable as a professional-grade viewer foundation, b
 - preview cache and smarter volume cache eviction
 - cancellable long-running import and search operations
 - broader AI response formatting and export workflows
-- persisted annotations, measurements, and reporting support
+- persisted annotations and reporting support

@@ -26,6 +26,8 @@ jobs:
             qt6-base-dev \
             qt6-base-dev-tools \
             libqt6sql6-psql \
+            libvtk9-dev \
+            libvtk9-qt-dev \
             libopencv-dev \
             libgdcm-dev \
             libgl1-mesa-dev \
@@ -35,7 +37,7 @@ jobs:
             libdbus-1-3
 
       - name: Configure
-        run: cmake -S . -B build-ci -G Ninja -DCMAKE_BUILD_TYPE=Release
+        run: cmake -S . -B build-ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DDICOMVIEWER_ENABLE_VTK=ON
 
       - name: Build
         run: cmake --build build-ci --parallel

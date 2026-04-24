@@ -69,7 +69,7 @@ std::shared_ptr<IVolumeData> VolumeResampleService::resampleIsotropic(
         targetSpacing = std::min({sourceGeometry.spacing.x, sourceGeometry.spacing.y, sourceGeometry.spacing.z});
     }
 
-    qDebug().nospace()
+    /*qDebug().nospace()
         << "VolumeResampleService source geometry:"
         << " dims=(" << sourceGeometry.dimensions.x << ", " << sourceGeometry.dimensions.y << ", " << sourceGeometry.dimensions.z << ")"
         << " spacing=(" << sourceGeometry.spacing.x << ", " << sourceGeometry.spacing.y << ", " << sourceGeometry.spacing.z << ")"
@@ -78,7 +78,7 @@ std::shared_ptr<IVolumeData> VolumeResampleService::resampleIsotropic(
         << sourceGeometry.direction[0] << ", " << sourceGeometry.direction[1] << ", " << sourceGeometry.direction[2] << "; "
         << sourceGeometry.direction[3] << ", " << sourceGeometry.direction[4] << ", " << sourceGeometry.direction[5] << "; "
         << sourceGeometry.direction[6] << ", " << sourceGeometry.direction[7] << ", " << sourceGeometry.direction[8] << "]"
-        << " targetSpacing=" << targetSpacing;
+        << " targetSpacing=" << targetSpacing;*/
 
     if (targetSpacing <= 0.0)
     {
@@ -132,12 +132,12 @@ std::shared_ptr<IVolumeData> VolumeResampleService::resampleIsotropic(
         0.0, 1.0, 0.0,
         0.0, 0.0, 1.0};
 
-    qDebug().nospace()
+    /*qDebug().nospace()
         << "VolumeResampleService resampled geometry:"
         << " centerWorldMin=(" << minimumCenterWorld.x << ", " << minimumCenterWorld.y << ", " << minimumCenterWorld.z << ")"
         << " centerWorldMax=(" << maximumCenterWorld.x << ", " << maximumCenterWorld.y << ", " << maximumCenterWorld.z << ")"
         << " dims=(" << resampledGeometry.dimensions.x << ", " << resampledGeometry.dimensions.y << ", " << resampledGeometry.dimensions.z << ")"
-        << " spacing=(" << resampledGeometry.spacing.x << ", " << resampledGeometry.spacing.y << ", " << resampledGeometry.spacing.z << ")";
+        << " spacing=(" << resampledGeometry.spacing.x << ", " << resampledGeometry.spacing.y << ", " << resampledGeometry.spacing.z << ")";*/
 
     std::vector<int16_t> voxels;
     voxels.reserve(resampledGeometry.voxelCount());
