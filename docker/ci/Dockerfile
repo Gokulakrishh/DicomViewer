@@ -54,7 +54,6 @@ RUN curl -L --retry 3 \
         -DVTK_QT_VERSION=6 \
         -DVTK_BUILD_TESTING=OFF \
         -DVTK_BUILD_EXAMPLES=OFF \
-        -DVTK_GROUP_ENABLE_Qt=YES \
         -DVTK_MODULE_ENABLE_VTK_CommonCore=YES \
         -DVTK_MODULE_ENABLE_VTK_CommonDataModel=YES \
         -DVTK_MODULE_ENABLE_VTK_FiltersModeling=YES \
@@ -79,4 +78,3 @@ ENV VTK_DIR=/opt/vtk/lib/cmake/vtk
 ENV CMAKE_PREFIX_PATH=/opt/vtk/lib/cmake/vtk
 
 WORKDIR /workspace
-
