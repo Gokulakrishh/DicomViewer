@@ -28,12 +28,16 @@ jobs:
 
       - name: Configure
         run: |
-          VTK_DIR="$(find /opt/vtk -name VTKConfig.cmake -exec dirname {} \; | head -n 1)"
-          test -n "$VTK_DIR"
+          if [ ! -f /opt/vtk/lib/cmake/vtk-9.5/VTKConfig.cmake ]; then
+            echo "VTKConfig.cmake not found in /opt/vtk/lib/cmake/vtk-9.5" >&2
+            find /opt/vtk -maxdepth 4 -name VTKConfig.cmake -print >&2 || true
+            exit 1
+          fi
+
           cmake -S . -B build-ci -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DDICOMVIEWER_ENABLE_VTK=ON \
-            -DVTK_DIR="$VTK_DIR"
+            -DVTK_DIR=/opt/vtk/lib/cmake/vtk-9.5
 
       - name: Build
         run: cmake --build build-ci --parallel
