@@ -467,6 +467,7 @@ install(TARGETS ${PROJECT_NAME}
 
 add_executable(ThreeDPipelineHarness
     tests/ThreeDPipelineHarness.cpp
+    src/Audit/DicomMetadataAudit.cpp
     src/Model/DicomImage.cpp
     ${APP_3D_MODEL_SOURCES}
     src/Services/VolumeBuilder.cpp
@@ -488,6 +489,7 @@ target_link_libraries(ThreeDPipelineHarness
 
 add_executable(ThreeDSeriesCli
     tests/ThreeDSeriesCli.cpp
+    src/Audit/DicomMetadataAudit.cpp
     src/FileHandling/GDCMFileHandling.cpp
     src/Model/DicomImage.cpp
     ${APP_3D_MODEL_SOURCES}
