@@ -10,7 +10,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     qt6-base-dev \
     qt6-base-dev-tools \
     libqt6sql6-psql \
-    libopencv-dev \
     libgdcm-dev \
     libgl1-mesa-dev \
     libglu1-mesa-dev \
