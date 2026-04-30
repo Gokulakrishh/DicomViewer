@@ -1,13 +1,6 @@
 name: Publish CI Image
 
 on:
-  push:
-    branches:
-      - main
-      - master
-    paths:
-      - docker/ci/Dockerfile
-      - .github/workflows/publish-ci-image.yml
   workflow_dispatch:
 
 permissions:

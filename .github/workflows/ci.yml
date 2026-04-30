@@ -27,7 +27,13 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Configure
-        run: cmake -S . -B build-ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DDICOMVIEWER_ENABLE_VTK=ON -DVTK_DIR=/opt/vtk/lib/cmake/vtk
+        run: |
+          VTK_DIR="$(find /opt/vtk -name VTKConfig.cmake -exec dirname {} \; | head -n 1)"
+          test -n "$VTK_DIR"
+          cmake -S . -B build-ci -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DDICOMVIEWER_ENABLE_VTK=ON \
+            -DVTK_DIR="$VTK_DIR"
 
       - name: Build
         run: cmake --build build-ci --parallel

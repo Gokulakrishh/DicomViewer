@@ -67,14 +67,10 @@ RUN curl -L --retry 3 \
         -DVTK_MODULE_ENABLE_VTK_RenderingImage=YES \
         -DVTK_MODULE_ENABLE_VTK_RenderingOpenGL2=YES \
         -DVTK_MODULE_ENABLE_VTK_RenderingVolumeOpenGL2=YES \
-    && cmake --build /tmp/vtk-build --parallel \
+    && cmake --build /tmp/vtk-build --parallel 2 \
     && cmake --install /tmp/vtk-build \
-    && VTK_CONFIG_DIR="$(find /opt/vtk -name VTKConfig.cmake -exec dirname {} \; | head -n 1)" \
-    && test -n "$VTK_CONFIG_DIR" \
-    && ln -sfn "$VTK_CONFIG_DIR" /opt/vtk/lib/cmake/vtk \
     && rm -rf /tmp/vtk-build /tmp/vtk.tar.gz /tmp/VTK-${VTK_VERSION}
 
-ENV VTK_DIR=/opt/vtk/lib/cmake/vtk
-ENV CMAKE_PREFIX_PATH=/opt/vtk/lib/cmake/vtk
+ENV CMAKE_PREFIX_PATH=/opt/vtk
 
 WORKDIR /workspace

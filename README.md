@@ -15,15 +15,15 @@
 
 ### Main Viewer
 
-![DicomViewer main window](docs/screenshots/main-viewer.png)
-
-### AI Assistant
-
-![DicomViewer AI assistant dock](docs/screenshots/ai-dock.png)
+![DicomViewer main window](docs/screenshots/main-viewer.gif)
 
 ### MPR Viewer
 
 ![DicomViewer MPR viewer](docs/screenshots/mpr-viewer.png)
+
+### 3D Viewer
+
+![DicomViewer 3D viewer bone render](docs/screenshots/3D%20Viewer%20-%20Bone.png)
 
 ## Clone
 
