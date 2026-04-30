@@ -23,10 +23,13 @@
 #include "DicomTreeController.h"
 #include "DicomTreePanel.h"
 #include "DicomViewportController.h"
+#include "Services/MeasurementAnnotationStore.h"
+#include "ViewerTools/ViewerToolPresentation.h"
 #include "VTK/MainView/VtkDiagnosticSliceView.h"
 #include "ui_DicomMainWindow.h"
 
 class FileHandling;
+class AuditService;
 class DatabaseService;
 class DicomImage;
 class IAppConfigService;
@@ -88,6 +91,7 @@ private:
     void displayImageInViewer(const DicomImage& image, int windowLevel, int windowWidth);
     void displayImageInViewer(const std::shared_ptr<DicomImage>& image);
     void displayCurrentSlice();
+    void loadCurrentSliceAnnotations();
     void loadSeries(const std::shared_ptr<Series>& series, int initialIndex = 0);
     void loadAndDisplayImage(const QString& filePath);
     void openMprViewer();
@@ -100,7 +104,10 @@ private:
     void rebuildAiAssistantService();
     void refreshAiDockState();
     void syncViewerToolbarState();
-    void setViewerInteractionMode(bool windowLevelEnabled, bool zoomEnabled);
+    void rebuildWindowLevelPresetComboBox();
+    void applyViewerToolSelection();
+    [[nodiscard]] std::optional<ViewerToolId> selectedViewerTool() const;
+    void setViewerInteractionMode(bool windowLevelEnabled, bool zoomEnabled, bool panEnabled = false);
 
 private slots:
     void openImage();
@@ -115,8 +122,6 @@ private slots:
     void onAskAiClicked();
     void onAiRequestFinished();
     void onClearAiConversationClicked();
-    void onWindowLevelToolToggled(bool checked);
-    void onZoomToolToggled(bool checked);
     void onWindowLevelPresetSelected();
     void onWindowLevelDragDelta(int deltaLevel, int deltaWidth);
     void onTreePatientContextSelected(
@@ -127,6 +132,7 @@ private slots:
         const QString& studyDate);
     void onTreeSeriesSelectionRequested(const QString& seriesInstanceUid);
     void onTreeFileSelectionRequested(const QString& filePath);
+    void onSliceAnnotationsChanged(const QList<SliceMeasurementAnnotationRecord>& records);
 
 private:
     Ui::DicomMainWindow* m_ui{nullptr};
@@ -148,15 +154,23 @@ private:
     QAction* m_aiPreferencesAction{nullptr};
     QAction* m_windowLevelToolAction{nullptr};
     QAction* m_zoomToolAction{nullptr};
+    QAction* m_panToolAction{nullptr};
+    QAction* m_distanceMeasurementToolAction{nullptr};
+    QAction* m_polylineMeasurementToolAction{nullptr};
+    QAction* m_angleMeasurementToolAction{nullptr};
+    QAction* m_rectangleRoiMeasurementToolAction{nullptr};
     QToolBar* m_viewerToolBar{nullptr};
+    std::unique_ptr<ViewerToolPresentation> m_viewerToolPresentation;
     QComboBox* m_windowLevelPresetComboBox{nullptr};
     std::unique_ptr<IAppConfigService> m_appConfigService;
+    std::unique_ptr<AuditService> m_auditService;
     std::unique_ptr<FileHandling> m_gdcmHandler;
     std::unique_ptr<IAdvancedViewerLauncher> m_advancedViewerLauncher;
     std::unique_ptr<AdvancedSeriesVolumeService> m_advancedSeriesVolumeService;
     std::unique_ptr<IAiAssistantService> m_aiAssistantService;
     std::unique_ptr<DicomViewportController> m_viewportController;
     std::unique_ptr<DatabaseService> m_databaseService;
+    std::unique_ptr<MeasurementAnnotationStore> m_measurementAnnotationStore;
     std::unique_ptr<IWarningDialogService> m_warningDialogService;
     QTimer* m_cineTimer{nullptr};
     QFutureWatcher<AiChatResponse>* m_aiResponseWatcher{nullptr};
@@ -169,5 +183,7 @@ private:
     QString m_currentDoctorName;
     QString m_currentModality;
     QString m_currentStudyDate;
+    QString m_activeSliceSopInstanceUid;
+    QSet<QString> m_loadedSliceAnnotationIds;
     bool m_aiHistoryShowingStatusMessage{false};
 };

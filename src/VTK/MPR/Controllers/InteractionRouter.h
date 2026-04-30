@@ -3,7 +3,7 @@
 #include "VTK/MPR/MprTypes.h"
 
 #include <QPointF>
-#include <Qt>
+#include <QtCore/Qt>
 
 class MprController;
 class ToolController;

@@ -1,11 +1,14 @@
 #pragma once
 
 #include "VTK/MPR/View/IMprPaneView.h"
+#include "ViewerTools/Measurements/MeasurementTypes.h"
 
 #include <QPointF>
 #include <QString>
 #include <memory>
 
+class CrosshairOverlayWidget;
+class MeasurementOverlayWidget;
 class QLabel;
 class QSlider;
 class QVBoxLayout;
@@ -28,6 +31,7 @@ public:
     void setZoomText(const QString& text);
     void setCrosshairVisible(bool visible);
     void setCrosshairPosition(const QPointF& normalizedPosition);
+    void setMeasurements(const QVector<DisplayMeasurement>& measurements);
 
 private:
     void layoutStatusLabels();
@@ -41,7 +45,8 @@ private:
     QLabel* m_sliceInfoLabel{nullptr};
     QLabel* m_windowLevelLabel{nullptr};
     QLabel* m_zoomLabel{nullptr};
-    QWidget* m_crosshairMarker{nullptr};
+    CrosshairOverlayWidget* m_crosshairOverlay{nullptr};
+    MeasurementOverlayWidget* m_measurementOverlay{nullptr};
     QSlider* m_sliceSlider{nullptr};
     QPointF m_crosshairNormalizedPosition{0.5, 0.5};
 };

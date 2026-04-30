@@ -3,6 +3,7 @@
 #include <QFileInfo>
 #include <QtConcurrent/QtConcurrent>
 #include <algorithm>
+#include <cmath>
 
 #include "FileHandling/FileHandling.h"
 #include "FileHandling/GDCMFileHandling.h"
@@ -10,6 +11,33 @@
 #include "Model/MedicalImage.h"
 #include "Model/DicomParameters.h"
 #include "Utilities/DiagnosticImageRenderer.h"
+#include "ViewerTools/WindowLevelPreset.h"
+
+namespace
+{
+bool builtInPresetIdForViewportPreset(ViewportWindowPreset preset, BuiltInWindowLevelPresetId& presetId)
+{
+    switch (preset)
+    {
+    case ViewportWindowPreset::Brain:
+        presetId = BuiltInWindowLevelPresetId::Brain;
+        return true;
+    case ViewportWindowPreset::SoftTissue:
+        presetId = BuiltInWindowLevelPresetId::SoftTissue;
+        return true;
+    case ViewportWindowPreset::Bone:
+        presetId = BuiltInWindowLevelPresetId::Bone;
+        return true;
+    case ViewportWindowPreset::Lung:
+        presetId = BuiltInWindowLevelPresetId::Lung;
+        return true;
+    case ViewportWindowPreset::Custom:
+        return false;
+    }
+
+    return false;
+}
+}
 
 DicomViewportController::DicomViewportController(
     FileHandling* fileHandling,
@@ -219,10 +247,24 @@ DicomViewportController::WindowControlState DicomViewportController::windowContr
             m_session.currentWindowLevel = displayedImage->defaultWindowLevel();
             m_session.currentWindowWidth = std::max(1, displayedImage->defaultWindowWidth());
             m_session.currentPreset = ViewportWindowPreset::Custom;
+            m_session.currentDicomWindowPresetIndex =
+                displayedImage->metadata() && !displayedImage->metadata()->windowPresets.empty() ? 0 : -1;
             m_session.windowStateInitialized = true;
         }
         else
         {
+            if (m_session.currentDicomWindowPresetIndex >= 0 && displayedImage->metadata() &&
+                m_session.currentDicomWindowPresetIndex <
+                    static_cast<int>(displayedImage->metadata()->windowPresets.size()))
+            {
+                const auto& preset =
+                    displayedImage->metadata()->windowPresets[static_cast<std::size_t>(m_session.currentDicomWindowPresetIndex)];
+                if (preset.width > 0.0)
+                {
+                    m_session.currentWindowLevel = static_cast<int>(std::lround(preset.center));
+                    m_session.currentWindowWidth = static_cast<int>(std::lround(preset.width));
+                }
+            }
             m_session.currentWindowLevel = std::clamp(m_session.currentWindowLevel, state.levelMin, state.levelMax);
             m_session.currentWindowWidth = std::clamp(m_session.currentWindowWidth, state.widthMin, state.widthMax);
         }
@@ -238,6 +280,7 @@ DicomViewportController::WindowControlState DicomViewportController::windowContr
             m_session.currentWindowLevel = 0;
             m_session.currentWindowWidth = 100;
             m_session.currentPreset = ViewportWindowPreset::Custom;
+            m_session.currentDicomWindowPresetIndex = -1;
             m_session.windowStateInitialized = true;
         }
     }
@@ -245,6 +288,7 @@ DicomViewportController::WindowControlState DicomViewportController::windowContr
     state.level = m_session.currentWindowLevel;
     state.width = m_session.currentWindowWidth;
     state.preset = m_session.currentPreset;
+    state.dicomPresetIndex = m_session.currentDicomWindowPresetIndex;
     return state;
 }
 
@@ -293,9 +337,15 @@ ViewportWindowPreset DicomViewportController::currentPreset() const
     return m_session.currentPreset;
 }
 
+int DicomViewportController::currentDicomWindowPresetIndex() const
+{
+    return m_session.currentDicomWindowPresetIndex;
+}
+
 void DicomViewportController::resetPreset()
 {
     m_session.currentPreset = ViewportWindowPreset::Custom;
+    m_session.currentDicomWindowPresetIndex = -1;
 }
 
 bool DicomViewportController::applyPreset(ViewportWindowPreset preset)
@@ -309,36 +359,76 @@ bool DicomViewportController::applyPreset(ViewportWindowPreset preset)
     const int minimumValue = displayedImage->minimumStoredValue();
     const int maximumValue = displayedImage->maximumStoredValue();
 
-    struct PresetValues
+    BuiltInWindowLevelPresetId presetId;
+    if (!builtInPresetIdForViewportPreset(preset, presetId))
     {
-        int level;
-        int width;
-    };
-
-    PresetValues presetValues{
-        displayedImage->defaultWindowLevel(),
-        displayedImage->defaultWindowWidth()};
-    switch (preset)
-    {
-    case ViewportWindowPreset::Brain:
-        presetValues = {40, 80};
-        break;
-    case ViewportWindowPreset::SoftTissue:
-        presetValues = {50, 350};
-        break;
-    case ViewportWindowPreset::Bone:
-        presetValues = {400, 1800};
-        break;
-    case ViewportWindowPreset::Lung:
-        presetValues = {-600, 1400};
-        break;
-    default:
         return false;
     }
 
+    const auto presetValues = windowLevelPreset(presetId);
     m_session.currentWindowLevel = std::clamp(presetValues.level, minimumValue, maximumValue);
     m_session.currentWindowWidth = std::clamp(presetValues.width, 1, std::max(1, maximumValue - minimumValue));
     m_session.currentPreset = preset;
+    m_session.currentDicomWindowPresetIndex = -1;
+    return true;
+}
+
+int DicomViewportController::dicomWindowPresetCount() const
+{
+    const DicomImage* displayedImage = currentImage();
+    if (!displayedImage || !displayedImage->metadata())
+    {
+        return 0;
+    }
+
+    return static_cast<int>(displayedImage->metadata()->windowPresets.size());
+}
+
+QString DicomViewportController::dicomWindowPresetLabel(int index) const
+{
+    const DicomImage* displayedImage = currentImage();
+    if (!displayedImage || !displayedImage->metadata() || index < 0 ||
+        index >= static_cast<int>(displayedImage->metadata()->windowPresets.size()))
+    {
+        return {};
+    }
+
+    const auto& preset = displayedImage->metadata()->windowPresets[static_cast<std::size_t>(index)];
+    const QString explanation = preset.explanation.trimmed();
+    const QString prefix = explanation.isEmpty() ? QString("DICOM %1").arg(index + 1) : QString("DICOM: %1").arg(explanation);
+    return QString("%1 (%2/%3)")
+        .arg(prefix)
+        .arg(static_cast<int>(std::lround(preset.center)))
+        .arg(static_cast<int>(std::lround(preset.width)));
+}
+
+bool DicomViewportController::applyDicomWindowPreset(int index)
+{
+    const DicomImage* displayedImage = currentImage();
+    if (!displayedImage || !displayedImage->hasRawPixels() || !displayedImage->metadata() || index < 0 ||
+        index >= static_cast<int>(displayedImage->metadata()->windowPresets.size()))
+    {
+        return false;
+    }
+
+    const auto& preset = displayedImage->metadata()->windowPresets[static_cast<std::size_t>(index)];
+    if (preset.width <= 0.0)
+    {
+        return false;
+    }
+
+    const int minimumValue = displayedImage->minimumStoredValue();
+    const int maximumValue = displayedImage->maximumStoredValue();
+    m_session.currentWindowLevel = std::clamp(
+        static_cast<int>(std::lround(preset.center)),
+        minimumValue,
+        maximumValue);
+    m_session.currentWindowWidth = std::clamp(
+        static_cast<int>(std::lround(preset.width)),
+        1,
+        std::max(1, maximumValue - minimumValue));
+    m_session.currentPreset = ViewportWindowPreset::Custom;
+    m_session.currentDicomWindowPresetIndex = index;
     return true;
 }
 

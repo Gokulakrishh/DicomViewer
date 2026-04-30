@@ -13,6 +13,8 @@ public:
         const QString& title,
         int windowLevel,
         int windowWidth,
+        std::vector<DicomWindowPreset> dicomWindowPresets = {},
+        int activeDicomWindowPresetIndex = -1,
         QWidget* parent = nullptr) override;
 
     QWidget* showThreeDVolume(

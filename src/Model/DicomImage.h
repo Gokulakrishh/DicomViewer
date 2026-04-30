@@ -1,5 +1,6 @@
 #pragma once
 
+#include "DicomMetadata.h"
 #include "MedicalImage.h"
 
 #include <array>
@@ -15,6 +16,7 @@ public:
     bool isValid() const override;
 
     const QString& filePath() const;
+    std::shared_ptr<const DicomInstanceMetadata> metadata() const;
     const QString& sopInstanceUid() const;
     const QString& instanceNumber() const;
     int width() const;
@@ -40,6 +42,9 @@ public:
 
     void setPixmap(const QPixmap& pixmap);
     void setFilePath(const QString& filePath);
+    void setMetadata(const std::shared_ptr<DicomInstanceMetadata>& metadata);
+    void setMetadata(const std::shared_ptr<const DicomInstanceMetadata>& metadata);
+    void setMetadata(const DicomInstanceMetadata& metadata);
     void setSopInstanceUid(const QString& sopInstanceUid);
     void setInstanceNumber(const QString& instanceNumber);
     void setDimensions(int width, int height);
@@ -55,10 +60,12 @@ public:
     void setSliceThickness(double sliceThickness);
     void setSpacingBetweenSlices(double spacingBetweenSlices);
 private:
+    DicomInstanceMetadata& mutableMetadata();
+
+private:
     QPixmap m_pixmap;
     QString m_filePath;
-    QString m_sopInstanceUid;
-    QString m_instanceNumber;
+    std::shared_ptr<DicomInstanceMetadata> m_metadata;
     int m_width{0};
     int m_height{0};
     std::vector<int16_t> m_rawPixels;

@@ -1,0 +1,16 @@
+#pragma once
+
+namespace AppVersion
+{
+inline constexpr const char* kProductName = "@DICOMVIEWER_PRODUCT_NAME@";
+inline constexpr const char* kDisplayName = "@DICOMVIEWER_DISPLAY_NAME@";
+inline constexpr const char* kBundleIdentifier = "@DICOMVIEWER_BUNDLE_IDENTIFIER@";
+
+inline constexpr const char* kVersionMajor = "@DICOMVIEWER_VERSION_MAJOR@";
+inline constexpr const char* kVersionMinor = "@DICOMVIEWER_VERSION_MINOR@";
+inline constexpr const char* kVersionRelease = "@DICOMVIEWER_VERSION_RELEASE@";
+inline constexpr const char* kVersionBuild = "@DICOMVIEWER_VERSION_BUILD@";
+
+inline constexpr const char* kVersionShort = "@DICOMVIEWER_VERSION_SHORT@";
+inline constexpr const char* kVersionString = "@DICOMVIEWER_VERSION_STRING@";
+}

@@ -1,5 +1,14 @@
 #include "Model/DicomImage.h"
 
+namespace
+{
+const QString& emptyString()
+{
+    static const QString empty;
+    return empty;
+}
+}
+
 const QPixmap& DicomImage::pixmap() const
 {
     return m_pixmap;
@@ -15,14 +24,19 @@ const QString& DicomImage::filePath() const
     return m_filePath;
 }
 
+std::shared_ptr<const DicomInstanceMetadata> DicomImage::metadata() const
+{
+    return m_metadata;
+}
+
 const QString& DicomImage::sopInstanceUid() const
 {
-    return m_sopInstanceUid;
+    return m_metadata ? m_metadata->sopInstanceUid : emptyString();
 }
 
 const QString& DicomImage::instanceNumber() const
 {
-    return m_instanceNumber;
+    return m_metadata ? m_metadata->instanceNumber : emptyString();
 }
 
 int DicomImage::width() const
@@ -140,20 +154,37 @@ void DicomImage::setFilePath(const QString& filePath)
     m_filePath = filePath;
 }
 
+void DicomImage::setMetadata(const std::shared_ptr<DicomInstanceMetadata>& metadata)
+{
+    m_metadata = metadata;
+}
+
+void DicomImage::setMetadata(const std::shared_ptr<const DicomInstanceMetadata>& metadata)
+{
+    m_metadata = metadata ? std::make_shared<DicomInstanceMetadata>(*metadata) : nullptr;
+}
+
+void DicomImage::setMetadata(const DicomInstanceMetadata& metadata)
+{
+    m_metadata = std::make_shared<DicomInstanceMetadata>(metadata);
+}
+
 void DicomImage::setSopInstanceUid(const QString& sopInstanceUid)
 {
-    m_sopInstanceUid = sopInstanceUid;
+    mutableMetadata().sopInstanceUid = sopInstanceUid;
 }
 
 void DicomImage::setInstanceNumber(const QString& instanceNumber)
 {
-    m_instanceNumber = instanceNumber;
+    mutableMetadata().instanceNumber = instanceNumber;
 }
 
 void DicomImage::setDimensions(int width, int height)
 {
     m_width = width;
     m_height = height;
+    mutableMetadata().columns = width;
+    mutableMetadata().rows = height;
 }
 
 void DicomImage::setRawPixels(const std::vector<int16_t>& rawPixels)
@@ -187,32 +218,59 @@ void DicomImage::setDefaultWindow(int windowLevel, int windowWidth)
 {
     m_defaultWindowLevel = windowLevel;
     m_defaultWindowWidth = windowWidth;
+    auto& metadata = mutableMetadata();
+    if (metadata.windowPresets.empty())
+    {
+        metadata.windowPresets.push_back({static_cast<double>(windowLevel), static_cast<double>(windowWidth), {}});
+    }
 }
 
 void DicomImage::setPixelSpacing(double pixelSpacingX, double pixelSpacingY)
 {
     m_pixelSpacingX = pixelSpacingX;
     m_pixelSpacingY = pixelSpacingY;
+    auto& metadata = mutableMetadata();
+    metadata.pixelSpacingX = pixelSpacingX;
+    metadata.pixelSpacingY = pixelSpacingY;
+    metadata.hasPixelSpacing = pixelSpacingX > 0.0 && pixelSpacingY > 0.0;
 }
 
 void DicomImage::setImagePositionPatient(const std::array<double, 3>& imagePositionPatient)
 {
     m_imagePositionPatient = imagePositionPatient;
     m_hasImagePositionPatient = true;
+    mutableMetadata().imagePositionPatient = imagePositionPatient;
+    mutableMetadata().hasImagePositionPatient = true;
 }
 
 void DicomImage::setImageOrientationPatient(const std::array<double, 6>& imageOrientationPatient)
 {
     m_imageOrientationPatient = imageOrientationPatient;
     m_hasImageOrientationPatient = true;
+    mutableMetadata().imageOrientationPatient = imageOrientationPatient;
+    mutableMetadata().hasImageOrientationPatient = true;
 }
 
 void DicomImage::setSliceThickness(double sliceThickness)
 {
     m_sliceThickness = sliceThickness;
+    mutableMetadata().sliceThickness = sliceThickness;
+    mutableMetadata().hasSliceThickness = sliceThickness > 0.0;
 }
 
 void DicomImage::setSpacingBetweenSlices(double spacingBetweenSlices)
 {
     m_spacingBetweenSlices = spacingBetweenSlices;
+    mutableMetadata().spacingBetweenSlices = spacingBetweenSlices;
+    mutableMetadata().hasSpacingBetweenSlices = spacingBetweenSlices > 0.0;
+}
+
+DicomInstanceMetadata& DicomImage::mutableMetadata()
+{
+    if (!m_metadata)
+    {
+        m_metadata = std::make_shared<DicomInstanceMetadata>();
+    }
+
+    return *m_metadata;
 }

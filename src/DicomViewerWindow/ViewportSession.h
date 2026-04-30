@@ -25,6 +25,7 @@ public:
     int currentWindowLevel{0};
     int currentWindowWidth{100};
     ViewportWindowPreset currentPreset{ViewportWindowPreset::Custom};
+    int currentDicomWindowPresetIndex{-1};
     bool windowStateInitialized{false};
     int seriesGeneration{0};
     bool cinePlaying{false};

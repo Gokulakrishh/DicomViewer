@@ -27,6 +27,9 @@ public:
     StudyPtr getStudy(const QString& studyInstanceUid) override;
     SeriesPtr getSeries(const QString& seriesInstanceUid) override;
     DicomImagePtr getImage(const QString& sopInstanceUid) override;
+    bool upsertSliceMeasurementAnnotation(const SliceMeasurementAnnotationRecord& record) override;
+    QList<SliceMeasurementAnnotationRecord> loadSliceMeasurementAnnotations(const QString& sopInstanceUid) override;
+    bool markSliceMeasurementAnnotationDeleted(const QString& annotationId) override;
     QPixmap getPreviewForPatient(const QString& patientId) override;
     QPixmap getPreviewForStudy(const QString& studyInstanceUid) override;
     QPixmap getPreviewForSeries(const QString& seriesInstanceUid) override;

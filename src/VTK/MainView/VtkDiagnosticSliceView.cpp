@@ -2,6 +2,12 @@
 
 #include "Model/DicomImage.h"
 #include "Model/MedicalImage.h"
+#include "ViewerOverlays/MeasurementOverlayWidget.h"
+#include "ViewerTools/Measurements/MeasurementAnalyticsService.h"
+#include "ViewerTools/Measurements/MeasurementTool.h"
+#include "ViewerTools/PanTool.h"
+#include "ViewerTools/ViewerInputEvent.h"
+#include "VTK/MainView/DicomMeasurementScalarSource.h"
 #include "VTK/MainView/VtkSliceSceneAdapter.h"
 
 #include <QEvent>
@@ -20,6 +26,53 @@
 #include <vtkUnsignedCharArray.h>
 #include <vtkWindowToImageFilter.h>
 #include <algorithm>
+
+namespace
+{
+bool measurementPointsEqual(const QVector<MeasurementPoint>& left, const QVector<MeasurementPoint>& right)
+{
+    if (left.size() != right.size())
+    {
+        return false;
+    }
+
+    for (int index = 0; index < left.size(); ++index)
+    {
+        const MeasurementPoint& lhs = left[index];
+        const MeasurementPoint& rhs = right[index];
+        if (lhs.x != rhs.x || lhs.y != rhs.y || lhs.z != rhs.z)
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool measurementAnnotationsEqual(const QVector<MeasurementAnnotation>& left, const QVector<MeasurementAnnotation>& right)
+{
+    if (left.size() != right.size())
+    {
+        return false;
+    }
+
+    for (int index = 0; index < left.size(); ++index)
+    {
+        const MeasurementAnnotation& lhs = left[index];
+        const MeasurementAnnotation& rhs = right[index];
+        if (lhs.id != rhs.id
+            || lhs.type != rhs.type
+            || lhs.color != rhs.color
+            || lhs.lengthMm != rhs.lengthMm
+            || !measurementPointsEqual(lhs.points, rhs.points))
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+}
 
 VtkDiagnosticSliceView::VtkDiagnosticSliceView(QWidget* parent)
     : QWidget(parent),
@@ -64,10 +117,32 @@ VtkDiagnosticSliceView::VtkDiagnosticSliceView(QWidget* parent)
     m_zoomLabel = new QLabel(m_renderWidget);
     configureStatusLabel(m_zoomLabel);
 
+    m_measurementOverlay = new MeasurementOverlayWidget(m_renderWidget);
+    m_measurementOverlay->setGeometry(m_renderWidget->rect());
+    m_measurementOverlay->raise();
+    m_measurementOverlay->show();
+
     buildControls();
     layout->addWidget(m_cineBar);
 
     m_sceneAdapter->attach(*m_renderWidget);
+    m_distanceMeasurementTool = std::make_unique<MeasurementTool>(
+        MeasurementToolMode::Distance,
+        m_measurementService,
+        *this);
+    m_polylineMeasurementTool = std::make_unique<MeasurementTool>(
+        MeasurementToolMode::Polyline,
+        m_measurementService,
+        *this);
+    m_angleMeasurementTool = std::make_unique<MeasurementTool>(
+        MeasurementToolMode::Angle,
+        m_measurementService,
+        *this);
+    m_rectangleRoiMeasurementTool = std::make_unique<MeasurementTool>(
+        MeasurementToolMode::RectangleRoi,
+        m_measurementService,
+        *this);
+    m_panTool = std::make_unique<PanTool>(*this);
 }
 
 VtkDiagnosticSliceView::~VtkDiagnosticSliceView() = default;
@@ -92,8 +167,10 @@ void VtkDiagnosticSliceView::setImage(std::shared_ptr<MedicalImage> image, bool 
         return;
     }
 
+    m_currentDicomImage = nullptr;
     m_sceneAdapter->setQImage(image->pixmap().toImage(), resetCamera);
     updateStatusText();
+    refreshMeasurementOverlay();
 }
 
 void VtkDiagnosticSliceView::setDicomImage(const DicomImage& image, int windowLevel, int windowWidth, bool resetCamera)
@@ -105,13 +182,19 @@ void VtkDiagnosticSliceView::setDicomImage(const DicomImage& image, int windowLe
     }
 
     m_sceneAdapter->setDicomImage(image, windowLevel, windowWidth, resetCamera);
+    m_currentDicomImage = &image;
     setWindowLevelWidth(windowLevel, windowWidth);
     updateStatusText();
+    refreshMeasurementOverlay();
 }
 
 void VtkDiagnosticSliceView::clearImage()
 {
     m_sceneAdapter->clear();
+    m_currentDicomImage = nullptr;
+    m_currentSeriesInstanceUid.clear();
+    m_currentSopInstanceUid.clear();
+    clearMeasurements();
     m_sliceInfoLabel->hide();
     m_windowLevelLabel->hide();
     m_zoomLabel->hide();
@@ -220,10 +303,111 @@ void VtkDiagnosticSliceView::setZoomInteractionEnabled(bool enabled)
     updateDragState(enabled, m_zoomDragActive);
 }
 
+void VtkDiagnosticSliceView::setPanInteractionEnabled(bool enabled)
+{
+    m_panInteractionEnabled = enabled;
+    updateDragState(enabled, m_panDragActive);
+    updateCursorState();
+}
+
+void VtkDiagnosticSliceView::setDistanceMeasurementEnabled(bool enabled)
+{
+    if (enabled)
+    {
+        m_activeMeasurementTool = ActiveMeasurementTool::Distance;
+        return;
+    }
+
+    if (m_activeMeasurementTool == ActiveMeasurementTool::Distance)
+    {
+        m_activeMeasurementTool = ActiveMeasurementTool::None;
+        m_measurementService.cancelActiveMeasurement();
+        refreshMeasurementOverlay();
+    }
+}
+
+void VtkDiagnosticSliceView::setPolylineMeasurementEnabled(bool enabled)
+{
+    if (enabled)
+    {
+        m_activeMeasurementTool = ActiveMeasurementTool::Polyline;
+        return;
+    }
+
+    if (m_activeMeasurementTool == ActiveMeasurementTool::Polyline)
+    {
+        m_activeMeasurementTool = ActiveMeasurementTool::None;
+        m_measurementService.cancelActiveMeasurement();
+        refreshMeasurementOverlay();
+    }
+}
+
+void VtkDiagnosticSliceView::setAngleMeasurementEnabled(bool enabled)
+{
+    if (enabled)
+    {
+        m_activeMeasurementTool = ActiveMeasurementTool::Angle;
+        return;
+    }
+
+    if (m_activeMeasurementTool == ActiveMeasurementTool::Angle)
+    {
+        m_activeMeasurementTool = ActiveMeasurementTool::None;
+        m_measurementService.cancelActiveMeasurement();
+        refreshMeasurementOverlay();
+    }
+}
+
+void VtkDiagnosticSliceView::setRectangleRoiMeasurementEnabled(bool enabled)
+{
+    if (enabled)
+    {
+        m_activeMeasurementTool = ActiveMeasurementTool::RectangleRoi;
+        return;
+    }
+
+    if (m_activeMeasurementTool == ActiveMeasurementTool::RectangleRoi)
+    {
+        m_activeMeasurementTool = ActiveMeasurementTool::None;
+        m_measurementService.cancelActiveMeasurement();
+        refreshMeasurementOverlay();
+    }
+}
+
+void VtkDiagnosticSliceView::clearMeasurements()
+{
+    m_measurementService.clear();
+    m_lastPersistedMeasurements.clear();
+    refreshMeasurementOverlay();
+}
+
+void VtkDiagnosticSliceView::setSliceAnnotationContext(const QString& seriesInstanceUid, const QString& sopInstanceUid)
+{
+    m_currentSeriesInstanceUid = seriesInstanceUid;
+    m_currentSopInstanceUid = sopInstanceUid;
+}
+
+void VtkDiagnosticSliceView::loadSliceAnnotations(const QList<SliceMeasurementAnnotationRecord>& records)
+{
+    QVector<MeasurementAnnotation> measurements;
+    measurements.reserve(records.size());
+    for (const SliceMeasurementAnnotationRecord& record : records)
+    {
+        measurements.append(record.measurement);
+    }
+
+    m_suppressSliceAnnotationSignal = true;
+    m_measurementService.setMeasurements(measurements);
+    m_lastPersistedMeasurements = measurements;
+    refreshMeasurementOverlay();
+    m_suppressSliceAnnotationSignal = false;
+}
+
 void VtkDiagnosticSliceView::applyZoomDelta(int delta)
 {
     m_sceneAdapter->applyZoomDelta(delta);
     updateStatusText();
+    refreshMeasurementOverlay();
 }
 
 QByteArray VtkDiagnosticSliceView::captureSnapshotPng() const
@@ -269,6 +453,7 @@ bool VtkDiagnosticSliceView::eventFilter(QObject* watched, QEvent* event)
         layoutOverlayWidgets();
         m_sceneAdapter->fitToView();
         updateStatusText();
+        refreshMeasurementOverlay();
     }
 
     if (event->type() == QEvent::Wheel)
@@ -279,6 +464,11 @@ bool VtkDiagnosticSliceView::eventFilter(QObject* watched, QEvent* event)
             emit wheelSliceNavigationRequested(wheelEvent->angleDelta().y() > 0 ? -1 : 1);
             return true;
         }
+    }
+
+    if (activeMeasurementTool() && handleMeasurementEvent(event))
+    {
+        return true;
     }
 
     if (m_windowLevelInteractionEnabled && event->type() == QEvent::MouseButtonPress)
@@ -299,6 +489,25 @@ bool VtkDiagnosticSliceView::eventFilter(QObject* watched, QEvent* event)
         {
             m_zoomDragActive = true;
             m_lastZoomDragPosition = mouseEvent->position().toPoint();
+            return true;
+        }
+    }
+
+    if (m_panInteractionEnabled && event->type() == QEvent::MouseButtonPress)
+    {
+        const auto* mouseEvent = static_cast<QMouseEvent*>(event);
+        if (mouseEvent->button() == Qt::LeftButton)
+        {
+            m_panDragActive = true;
+            m_lastPanDragPosition = mouseEvent->position().toPoint();
+            updateCursorState();
+            m_panTool->beginInteraction(makePanViewerInputEvent(
+                ViewerInputEvent::Phase::Begin,
+                MprSlicePlane::Axial,
+                mouseEvent->button(),
+                mouseEvent->position(),
+                {},
+                m_renderWidget->size()));
             return true;
         }
     }
@@ -329,6 +538,25 @@ bool VtkDiagnosticSliceView::eventFilter(QObject* watched, QEvent* event)
         return true;
     }
 
+    if (m_panInteractionEnabled && event->type() == QEvent::MouseMove && m_panDragActive)
+    {
+        const auto* mouseEvent = static_cast<QMouseEvent*>(event);
+        const QPoint currentPosition = mouseEvent->position().toPoint();
+        const QPoint delta = currentPosition - m_lastPanDragPosition;
+        m_lastPanDragPosition = currentPosition;
+        if (!delta.isNull())
+        {
+            m_panTool->updateInteraction(makePanViewerInputEvent(
+                ViewerInputEvent::Phase::Update,
+                MprSlicePlane::Axial,
+                Qt::NoButton,
+                mouseEvent->position(),
+                delta,
+                m_renderWidget->size()));
+        }
+        return true;
+    }
+
     if (event->type() == QEvent::MouseButtonRelease)
     {
         const auto* mouseEvent = static_cast<QMouseEvent*>(event);
@@ -342,6 +570,19 @@ bool VtkDiagnosticSliceView::eventFilter(QObject* watched, QEvent* event)
             m_zoomDragActive = false;
             return m_zoomInteractionEnabled;
         }
+        if (mouseEvent->button() == Qt::LeftButton && m_panDragActive)
+        {
+            m_panDragActive = false;
+            updateCursorState();
+            m_panTool->endInteraction(makePanViewerInputEvent(
+                ViewerInputEvent::Phase::End,
+                MprSlicePlane::Axial,
+                mouseEvent->button(),
+                mouseEvent->position(),
+                {},
+                m_renderWidget->size()));
+            return m_panInteractionEnabled;
+        }
     }
 
     return QWidget::eventFilter(watched, event);
@@ -353,6 +594,287 @@ void VtkDiagnosticSliceView::updateDragState(bool enabled, bool& dragActive)
     {
         dragActive = false;
     }
+}
+
+void VtkDiagnosticSliceView::updateCursorState()
+{
+    if (!m_renderWidget)
+    {
+        return;
+    }
+
+    if (m_panDragActive)
+    {
+        m_renderWidget->setCursor(Qt::ClosedHandCursor);
+        return;
+    }
+
+    if (m_panInteractionEnabled)
+    {
+        m_renderWidget->setCursor(Qt::OpenHandCursor);
+        return;
+    }
+
+    m_renderWidget->unsetCursor();
+}
+
+bool VtkDiagnosticSliceView::handleMeasurementEvent(QEvent* event)
+{
+    IViewerTool* tool = activeMeasurementTool();
+    if (!tool)
+    {
+        return false;
+    }
+
+    ViewerInputEvent inputEvent;
+    inputEvent.plane = MprSlicePlane::Axial;
+    inputEvent.widgetSize = m_renderWidget ? m_renderWidget->size() : QSize{};
+
+    switch (event->type())
+    {
+    case QEvent::MouseMove:
+    {
+        const auto* mouseEvent = static_cast<QMouseEvent*>(event);
+        inputEvent.eventType = ViewerInputEvent::EventType::MouseMove;
+        inputEvent.phase = ViewerInputEvent::Phase::Update;
+        inputEvent.button = Qt::NoButton;
+        inputEvent.displayPosition = mouseEvent->position();
+        tool->updateInteraction(inputEvent);
+        event->accept();
+        return true;
+    }
+    case QEvent::MouseButtonPress:
+    {
+        const auto* mouseEvent = static_cast<QMouseEvent*>(event);
+        inputEvent.eventType = ViewerInputEvent::EventType::MousePress;
+        inputEvent.phase = ViewerInputEvent::Phase::Begin;
+        inputEvent.button = mouseEvent->button();
+        inputEvent.displayPosition = mouseEvent->position();
+        tool->beginInteraction(inputEvent);
+        event->accept();
+        return true;
+    }
+    case QEvent::MouseButtonRelease:
+    {
+        const auto* mouseEvent = static_cast<QMouseEvent*>(event);
+        inputEvent.eventType = ViewerInputEvent::EventType::MouseRelease;
+        inputEvent.phase = ViewerInputEvent::Phase::End;
+        inputEvent.button = mouseEvent->button();
+        inputEvent.displayPosition = mouseEvent->position();
+        tool->endInteraction(inputEvent);
+        event->accept();
+        return true;
+    }
+    case QEvent::MouseButtonDblClick:
+    {
+        const auto* mouseEvent = static_cast<QMouseEvent*>(event);
+        inputEvent.eventType = ViewerInputEvent::EventType::MouseDoubleClick;
+        inputEvent.phase = ViewerInputEvent::Phase::Begin;
+        inputEvent.button = mouseEvent->button();
+        inputEvent.displayPosition = mouseEvent->position();
+        tool->beginInteraction(inputEvent);
+        event->accept();
+        return true;
+    }
+    default:
+        break;
+    }
+
+    return false;
+}
+
+MeasurementPoint VtkDiagnosticSliceView::measurementPointForInput(const ViewerInputEvent& event) const
+{
+    return measurementPointForMousePosition(event.displayPosition);
+}
+
+void VtkDiagnosticSliceView::onMeasurementToolUpdated()
+{
+    refreshMeasurementOverlay();
+    emitSliceAnnotationsChangedIfNeeded();
+}
+
+void VtkDiagnosticSliceView::handleCrosshairInput(const ViewerInputEvent& event)
+{
+    Q_UNUSED(event);
+}
+
+void VtkDiagnosticSliceView::handleWindowLevelInput(const ViewerInputEvent& event)
+{
+    Q_UNUSED(event);
+}
+
+void VtkDiagnosticSliceView::handleZoomInput(const ViewerInputEvent& event)
+{
+    Q_UNUSED(event);
+}
+
+void VtkDiagnosticSliceView::handlePanInput(const ViewerInputEvent& event)
+{
+    if (event.phase != ViewerInputEvent::Phase::Update)
+    {
+        return;
+    }
+
+    m_sceneAdapter->pan(event.displayDelta, event.widgetSize);
+    refreshMeasurementOverlay();
+    updateStatusText();
+}
+
+void VtkDiagnosticSliceView::refreshMeasurementOverlay()
+{
+    if (!m_measurementOverlay || !m_renderWidget)
+    {
+        return;
+    }
+
+    m_measurementOverlay->setGeometry(m_renderWidget->rect());
+    m_measurementOverlay->setMeasurements(displayMeasurements());
+    m_measurementOverlay->raise();
+}
+
+void VtkDiagnosticSliceView::emitSliceAnnotationsChangedIfNeeded()
+{
+    if (m_suppressSliceAnnotationSignal
+        || m_currentSeriesInstanceUid.isEmpty()
+        || m_currentSopInstanceUid.isEmpty())
+    {
+        return;
+    }
+
+    const QVector<MeasurementAnnotation>& currentMeasurements = m_measurementService.measurements();
+    if (measurementAnnotationsEqual(currentMeasurements, m_lastPersistedMeasurements))
+    {
+        return;
+    }
+
+    m_lastPersistedMeasurements = currentMeasurements;
+    emit sliceAnnotationsChanged(currentSliceAnnotationRecords());
+}
+
+IViewerTool* VtkDiagnosticSliceView::activeMeasurementTool() const
+{
+    switch (m_activeMeasurementTool)
+    {
+    case ActiveMeasurementTool::Distance:
+        return m_distanceMeasurementTool.get();
+    case ActiveMeasurementTool::Polyline:
+        return m_polylineMeasurementTool.get();
+    case ActiveMeasurementTool::Angle:
+        return m_angleMeasurementTool.get();
+    case ActiveMeasurementTool::RectangleRoi:
+        return m_rectangleRoiMeasurementTool.get();
+    case ActiveMeasurementTool::None:
+        break;
+    }
+
+    return nullptr;
+}
+
+MeasurementPoint VtkDiagnosticSliceView::measurementPointForMousePosition(const QPointF& position) const
+{
+    return m_sceneAdapter->measurementPointFromDisplayPosition(position, m_renderWidget->size());
+}
+
+QString VtkDiagnosticSliceView::measurementLabel(const MeasurementAnnotation& measurement) const
+{
+    switch (measurement.type)
+    {
+    case MeasurementType::Distance:
+    case MeasurementType::Polyline:
+        return MeasurementService::formattedLength(measurement.lengthMm);
+    case MeasurementType::Angle:
+        return MeasurementService::formattedAngle(MeasurementService::angleDegrees(measurement.points));
+    case MeasurementType::RectangleRoi:
+        return MeasurementAnalyticsService::rectangleRoiLabel(
+            measurement,
+            DicomMeasurementScalarSource(m_currentDicomImage, *m_sceneAdapter));
+    }
+
+    return {};
+}
+
+QVector<DisplayMeasurement> VtkDiagnosticSliceView::displayMeasurements() const
+{
+    QVector<DisplayMeasurement> displayMeasurements;
+    const auto appendMeasurement = [&](const MeasurementAnnotation& measurement, bool preview) {
+        DisplayMeasurement display;
+        display.type = measurement.type;
+        display.color = measurement.color;
+        display.label = measurementLabel(measurement);
+        display.preview = preview;
+        if (measurement.type == MeasurementType::RectangleRoi && measurement.points.size() >= 2)
+        {
+            const QPointF first = m_sceneAdapter->imageIndexForMeasurementPoint(measurement.points[0]);
+            const QPointF second = m_sceneAdapter->imageIndexForMeasurementPoint(measurement.points[1]);
+            const QPointF topLeft(std::min(first.x(), second.x()), std::min(first.y(), second.y()));
+            const QPointF bottomRight(std::max(first.x(), second.x()), std::max(first.y(), second.y()));
+            const QPointF topRight(bottomRight.x(), topLeft.y());
+            const QPointF bottomLeft(topLeft.x(), bottomRight.y());
+            display.points = {
+                m_sceneAdapter->displayPositionForImageIndex(topLeft, m_renderWidget->size()),
+                m_sceneAdapter->displayPositionForImageIndex(topRight, m_renderWidget->size()),
+                m_sceneAdapter->displayPositionForImageIndex(bottomRight, m_renderWidget->size()),
+                m_sceneAdapter->displayPositionForImageIndex(bottomLeft, m_renderWidget->size())};
+            display.closedShape = true;
+            display.filled = true;
+            display.labelAnchor = display.points[1] + QPointF(8.0, -8.0);
+        }
+        else
+        {
+            display.points.reserve(measurement.points.size());
+            for (const auto& point : measurement.points)
+            {
+                display.points.append(m_sceneAdapter->displayPositionForMeasurementPoint(point, m_renderWidget->size()));
+            }
+            if (!display.points.isEmpty())
+            {
+                display.labelAnchor = display.points.last() + QPointF(8.0, -8.0);
+            }
+        }
+        displayMeasurements.append(display);
+    };
+
+    for (const auto& measurement : m_measurementService.measurements())
+    {
+        appendMeasurement(measurement, false);
+    }
+    if (const auto activeMeasurement = m_measurementService.activeMeasurement())
+    {
+        appendMeasurement(*activeMeasurement, true);
+    }
+    return displayMeasurements;
+}
+
+QList<SliceMeasurementAnnotationRecord> VtkDiagnosticSliceView::currentSliceAnnotationRecords() const
+{
+    QList<SliceMeasurementAnnotationRecord> records;
+    if (m_currentSeriesInstanceUid.isEmpty() || m_currentSopInstanceUid.isEmpty())
+    {
+        return records;
+    }
+
+    records.reserve(m_measurementService.measurements().size());
+    for (const MeasurementAnnotation& measurement : m_measurementService.measurements())
+    {
+        SliceMeasurementAnnotationRecord record;
+        record.seriesInstanceUid = m_currentSeriesInstanceUid;
+        record.sopInstanceUid = m_currentSopInstanceUid;
+        record.measurement = measurement;
+        if (measurement.type == MeasurementType::Angle)
+        {
+            record.angleDegrees = MeasurementService::angleDegrees(measurement.points);
+        }
+        else if (measurement.type == MeasurementType::RectangleRoi && m_currentDicomImage)
+        {
+            record.roiStatistics = MeasurementAnalyticsService::rectangleRoiStatistics(
+                measurement,
+                DicomMeasurementScalarSource(m_currentDicomImage, *m_sceneAdapter));
+        }
+        records.append(record);
+    }
+
+    return records;
 }
 
 void VtkDiagnosticSliceView::buildControls()
@@ -435,4 +957,5 @@ void VtkDiagnosticSliceView::layoutOverlayWidgets()
     positionStatusLabel(m_zoomLabel);
     positionStatusLabel(m_windowLevelLabel);
     positionStatusLabel(m_sliceInfoLabel);
+    refreshMeasurementOverlay();
 }

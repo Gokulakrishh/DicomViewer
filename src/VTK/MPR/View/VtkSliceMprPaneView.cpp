@@ -1,5 +1,8 @@
 #include "VTK/MPR/View/VtkSliceMprPaneView.h"
 
+#include "ViewerOverlays/CrosshairOverlayWidget.h"
+#include "ViewerOverlays/MeasurementOverlayWidget.h"
+
 #include <QLabel>
 #include <QSlider>
 #include <QVBoxLayout>
@@ -36,14 +39,15 @@ VtkSliceMprPaneView::VtkSliceMprPaneView(const QString& title, MprSlicePlane pla
     m_zoomLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
     m_zoomLabel->setStyleSheet(overlayStyle);
 
-    m_crosshairMarker = new QWidget(m_renderWidget);
-    m_crosshairMarker->setFixedSize(12, 12);
-    m_crosshairMarker->setStyleSheet(
-        "background-color: rgba(72, 164, 255, 200);"
-        "border: 2px solid rgba(72, 164, 255, 255);"
-        "border-radius: 6px;");
-    m_crosshairMarker->hide();
-    m_crosshairMarker->raise();
+    m_crosshairOverlay = new CrosshairOverlayWidget(m_renderWidget);
+    m_crosshairOverlay->setGeometry(m_renderWidget->rect());
+    m_crosshairOverlay->raise();
+    m_crosshairOverlay->show();
+
+    m_measurementOverlay = new MeasurementOverlayWidget(m_renderWidget);
+    m_measurementOverlay->setGeometry(m_renderWidget->rect());
+    m_measurementOverlay->raise();
+    m_measurementOverlay->show();
 
     m_sliceSlider = new QSlider(Qt::Horizontal, m_rootWidget);
     m_sliceSlider->setRange(0, 0);
@@ -102,20 +106,30 @@ void VtkSliceMprPaneView::setZoomText(const QString& text)
 
 void VtkSliceMprPaneView::setCrosshairVisible(bool visible)
 {
-    m_crosshairMarker->setVisible(visible);
+    m_crosshairOverlay->setVisible(visible);
     if (visible)
     {
-        m_crosshairMarker->raise();
+        m_crosshairOverlay->raise();
+        m_crosshairOverlay->update();
     }
 }
 
 void VtkSliceMprPaneView::setCrosshairPosition(const QPointF& normalizedPosition)
 {
     m_crosshairNormalizedPosition = normalizedPosition;
-    const int x = static_cast<int>(m_crosshairNormalizedPosition.x() * m_renderWidget->width()) - (m_crosshairMarker->width() / 2);
-    const int y = static_cast<int>(m_crosshairNormalizedPosition.y() * m_renderWidget->height()) - (m_crosshairMarker->height() / 2);
-    m_crosshairMarker->move(x, y);
-    m_crosshairMarker->raise();
+    m_crosshairOverlay->setGeometry(m_renderWidget->rect());
+
+    const int x = static_cast<int>(m_crosshairNormalizedPosition.x() * m_renderWidget->width());
+    const int y = static_cast<int>(m_crosshairNormalizedPosition.y() * m_renderWidget->height());
+    m_crosshairOverlay->setPosition(QPoint(x, y));
+    m_crosshairOverlay->raise();
+}
+
+void VtkSliceMprPaneView::setMeasurements(const QVector<DisplayMeasurement>& measurements)
+{
+    m_measurementOverlay->setGeometry(m_renderWidget->rect());
+    m_measurementOverlay->setMeasurements(measurements);
+    m_measurementOverlay->raise();
 }
 
 void VtkSliceMprPaneView::layoutStatusLabels()
@@ -140,4 +154,6 @@ void VtkSliceMprPaneView::layoutStatusLabels()
     m_windowLevelLabel->raise();
     m_zoomLabel->raise();
     setCrosshairPosition(m_crosshairNormalizedPosition);
+    m_measurementOverlay->setGeometry(m_renderWidget->rect());
+    m_measurementOverlay->raise();
 }

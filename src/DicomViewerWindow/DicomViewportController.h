@@ -27,6 +27,7 @@ public:
         int level{0};
         int width{100};
         ViewportWindowPreset preset{ViewportWindowPreset::Custom};
+        int dicomPresetIndex{-1};
     };
 
     explicit DicomViewportController(
@@ -59,8 +60,12 @@ public:
     int currentWindowLevel() const;
     int currentWindowWidth() const;
     ViewportWindowPreset currentPreset() const;
+    int currentDicomWindowPresetIndex() const;
     void resetPreset();
     bool applyPreset(ViewportWindowPreset preset);
+    int dicomWindowPresetCount() const;
+    QString dicomWindowPresetLabel(int index) const;
+    bool applyDicomWindowPreset(int index);
     void setCinePlaying(bool playing);
     bool isCinePlaying() const;
     const ViewportSession& session() const;

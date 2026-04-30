@@ -30,3 +30,11 @@ void MprToolAdapter::handleZoomInput(const ViewerInputEvent& event)
         m_sceneAdapter.zoom(event.plane, event.normalizedDelta);
     }
 }
+
+void MprToolAdapter::handlePanInput(const ViewerInputEvent& event)
+{
+    if (event.phase == ViewerInputEvent::Phase::Update)
+    {
+        m_sceneAdapter.pan(event.plane, event.displayDelta, event.widgetSize);
+    }
+}

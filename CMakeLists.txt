@@ -1,12 +1,27 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(DicomViewer
-    VERSION 1.0
+set(DICOMVIEWER_PRODUCT_NAME "DicomViewer" CACHE STRING "Internal product name")
+set(DICOMVIEWER_DISPLAY_NAME "DicomViewer" CACHE STRING "User-facing product name")
+set(DICOMVIEWER_BUNDLE_IDENTIFIER "com.dicomviewer.app" CACHE STRING "macOS bundle identifier")
+set(DICOMVIEWER_VERSION_MAJOR "1" CACHE STRING "Major version")
+set(DICOMVIEWER_VERSION_MINOR "0" CACHE STRING "Minor version")
+set(DICOMVIEWER_VERSION_RELEASE "0" CACHE STRING "Release/Patch version")
+set(DICOMVIEWER_VERSION_BUILD "1" CACHE STRING "Build version")
+
+set(DICOMVIEWER_VERSION_SHORT
+    "${DICOMVIEWER_VERSION_MAJOR}.${DICOMVIEWER_VERSION_MINOR}.${DICOMVIEWER_VERSION_RELEASE}")
+set(DICOMVIEWER_VERSION_STRING
+    "${DICOMVIEWER_VERSION_MAJOR}.${DICOMVIEWER_VERSION_MINOR}.${DICOMVIEWER_VERSION_RELEASE}.${DICOMVIEWER_VERSION_BUILD}")
+
+project(${DICOMVIEWER_PRODUCT_NAME}
+    VERSION ${DICOMVIEWER_VERSION_SHORT}
     DESCRIPTION "Dicom Image Viewer (2D/3D)"
     LANGUAGES C CXX
 )
 
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
+message(STATUS "Product: ${DICOMVIEWER_DISPLAY_NAME}")
+message(STATUS "Version: ${DICOMVIEWER_VERSION_STRING}")
 add_compile_definitions(__DicomViewer_BUILD_TYPE="${CMAKE_BUILD_TYPE}")
 
 # ----------------------------
@@ -21,6 +36,14 @@ set(CMAKE_AUTOUIC ON)
 
 option(DICOMVIEWER_ENABLE_VTK "Enable VTK-based 3D volume rendering integration" ON)
 option(DICOMVIEWER_ENABLE_MEMORY_LOGGING "Enable memory management debug logging" OFF)
+
+set(DICOMVIEWER_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+file(MAKE_DIRECTORY "${DICOMVIEWER_GENERATED_DIR}")
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/Utilities/AppVersion.h.in"
+    "${DICOMVIEWER_GENERATED_DIR}/AppVersion.h"
+    @ONLY
+)
 
 if(DICOMVIEWER_ENABLE_MEMORY_LOGGING)
     add_compile_definitions(DICOMVIEWER_ENABLE_MEMORY_LOGGING=1)
@@ -45,9 +68,6 @@ endif()
 
 find_package(GDCM REQUIRED)
 message(STATUS "GDCM")
-
-find_package(OpenCV 4.6 REQUIRED core imgproc imgcodecs)
-message(STATUS "OpenCV version: ${OpenCV_VERSION}")
 
 set(APP_3D_MODEL_SOURCES
     src/Model/MeshData.cpp
@@ -157,11 +177,18 @@ if(DICOMVIEWER_ENABLE_VTK)
         src/VTK/Adapters/VtkVolumeAdapter.cpp
         src/VTK/MainView/VtkSliceSceneAdapter.cpp
         src/VTK/MainView/VtkDiagnosticSliceView.cpp
+        src/VTK/MainView/DicomMeasurementScalarSource.cpp
         src/ViewerTools/CrosshairTool.cpp
+        src/ViewerTools/Measurements/MeasurementAnalyticsService.cpp
+        src/ViewerTools/Measurements/MeasurementService.cpp
+        src/ViewerTools/Measurements/MeasurementTool.cpp
+        src/ViewerTools/PanTool.cpp
+        src/ViewerTools/ViewerToolPresentation.cpp
         src/ViewerTools/WindowLevelTool.cpp
         src/ViewerTools/ZoomTool.cpp
         src/VTK/MPR/Adapters/VtkMprSceneAdapter.cpp
         src/VTK/MPR/Adapters/MprToolAdapter.cpp
+        src/VTK/MPR/MprMeasurementScalarSource.cpp
         src/VTK/MPR/Controllers/InteractionRouter.cpp
         src/VTK/MPR/Controllers/MprController.cpp
         src/VTK/MPR/Controllers/ToolController.cpp
@@ -184,14 +211,26 @@ if(DICOMVIEWER_ENABLE_VTK)
         src/ViewerTools/CrosshairTool.h
         src/ViewerTools/IViewerTool.h
         src/ViewerTools/IViewerToolTarget.h
+        src/ViewerTools/Measurements/IMeasurementScalarSource.h
+        src/ViewerTools/Measurements/MeasurementAnalyticsService.h
+        src/ViewerTools/Measurements/MeasurementService.h
+        src/ViewerTools/Measurements/MeasurementTool.h
+        src/ViewerTools/Measurements/MeasurementTypes.h
+        src/VTK/MainView/DicomMeasurementScalarSource.h
+        src/ViewerTools/PanTool.h
         src/ViewerTools/ViewerInputEvent.h
+        src/ViewerTools/ViewerToolPresentation.h
+        src/ViewerTools/WindowLevelPreset.h
         src/ViewerTools/WindowLevelTool.h
         src/ViewerTools/ZoomTool.h
+        src/ViewerOverlays/CrosshairOverlayWidget.h
+        src/ViewerOverlays/MeasurementOverlayWidget.h
         src/VTK/MPR/Adapters/MprToolAdapter.h
         src/VTK/MPR/Adapters/VtkMprSceneAdapter.h
         src/VTK/MPR/Controllers/InteractionRouter.h
         src/VTK/MPR/Controllers/MprController.h
         src/VTK/MPR/Controllers/ToolController.h
+        src/VTK/MPR/MprMeasurementScalarSource.h
         src/VTK/MPR/MprTypes.h
         src/VTK/MPR/State/MprScene.h
         src/VTK/MPR/Sync/MprSynchronizationService.h
@@ -215,6 +254,10 @@ set(SRC_FILES
     src/resources/styles.qrc
     src/AI/GeminiAiAssistantService.cpp
     src/AI/QtHttpAiServerClient.cpp
+    src/Audit/AuditService.cpp
+    src/Audit/DicomMetadataAudit.cpp
+    src/Audit/ErrorAuditAdapter.cpp
+    src/Audit/JsonlAuditSink.cpp
     src/AdvancedViewer/WidgetsAdvancedViewerLauncher.cpp
     src/Errors/QtErrorDialogPresenter.cpp
     src/Utilities/AppStyle.cpp
@@ -230,6 +273,7 @@ set(SRC_FILES
     src/DicomViewerWindow/DicomTreePanel.cpp
     src/DicomViewerWindow/DicomMainWindow.ui
     src/Model/DicomImage.cpp
+    src/Services/MeasurementAnnotationStore.cpp
     src/DicomViewerWindow/DicomViewportController.cpp
     src/DicomViewerWindow/ViewportSession.cpp
     src/Services/AdvancedSeriesVolumeService.cpp
@@ -250,6 +294,14 @@ set(HEADER_FILES
     src/AI/IAiAssistantService.h
     src/AI/IAiServerClient.h
     src/AI/QtHttpAiServerClient.h
+    src/Audit/AuditEvent.h
+    src/Audit/AuditService.h
+    src/Audit/DicomMetadataAudit.h
+    src/Audit/ErrorAuditAdapter.h
+    src/Audit/IAuditService.h
+    src/Audit/IAuditSink.h
+    src/Audit/JsonlAuditSink.h
+    src/Audit/NullAuditSink.h
     src/AdvancedViewer/IAdvancedViewerLauncher.h
     src/AdvancedViewer/WidgetsAdvancedViewerLauncher.h
     src/Errors/AppError.h
@@ -274,8 +326,12 @@ set(HEADER_FILES
     src/Utilities/LoadingDialog.h
     src/Utilities/QSettingsAppConfigService.h
     src/Utilities/VolumeValidationSettings.h
+    src/ViewerOverlays/CrosshairOverlayWidget.h
+    src/ViewerTools/WindowLevelPreset.h
     src/Model/MedicalImage.h
+    src/Model/DicomMetadata.h
     src/Model/DicomImage.h
+    src/Model/MeasurementAnnotationRecord.h
     src/Model/DicomParameters.h
     src/Model/VolumeConcepts.h
     src/Model/VolumeGeometry.h
@@ -291,6 +347,7 @@ set(HEADER_FILES
     src/DicomViewerWindow/ViewportSession.h
     src/Services/AdvancedSeriesVolumeService.h
     src/Services/VolumeBuilder.h
+    src/Services/MeasurementAnnotationStore.h
     src/Services/VolumeResampleService.h
     src/Utilities/WarningDialog.h
     src/Utilities/WarningDialogService.h
@@ -318,6 +375,7 @@ add_executable(${PROJECT_NAME}
 # ----------------------------
 target_include_directories(${PROJECT_NAME} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${DICOMVIEWER_GENERATED_DIR}
         /usr/include/gdcm-3.0
 )
 
@@ -332,7 +390,6 @@ target_link_libraries(${PROJECT_NAME}
         Qt6::Sql
         Qt6::Concurrent
         Qt6::Network
-        ${OpenCV_LIBS}
     	${GDCM_LIBRARIES}
         gdcmCommon
         gdcmMSFF
@@ -386,6 +443,10 @@ endif()
 if (APPLE)
     set_target_properties(${PROJECT_NAME} PROPERTIES
         MACOSX_BUNDLE ON
+        MACOSX_BUNDLE_BUNDLE_NAME "${DICOMVIEWER_DISPLAY_NAME}"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "${DICOMVIEWER_BUNDLE_IDENTIFIER}"
+        MACOSX_BUNDLE_BUNDLE_VERSION "${DICOMVIEWER_VERSION_STRING}"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "${DICOMVIEWER_VERSION_SHORT}"
     )
 
     add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
@@ -449,7 +510,6 @@ target_link_libraries(ThreeDSeriesCli
         Qt6::Core
         Qt6::Gui
         Qt6::Widgets
-        ${OpenCV_LIBS}
         ${GDCM_LIBRARIES}
         gdcmCommon
         gdcmMSFF

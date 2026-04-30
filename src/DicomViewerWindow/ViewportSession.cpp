@@ -8,6 +8,7 @@ void ViewportSession::clear()
     currentWindowLevel = 0;
     currentWindowWidth = 100;
     currentPreset = ViewportWindowPreset::Custom;
+    currentDicomWindowPresetIndex = -1;
     windowStateInitialized = false;
     cinePlaying = false;
 }

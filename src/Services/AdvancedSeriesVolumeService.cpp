@@ -22,8 +22,10 @@ AppError makeAdvancedViewerBuildError(const QString& technicalMessage, const QSt
 
 AdvancedSeriesVolumeService::AdvancedSeriesVolumeService(
     const FileHandling& fileHandling,
-    VolumeValidationSettings validationSettings)
+    VolumeValidationSettings validationSettings,
+    IAuditService* auditService)
     : m_fileHandling(fileHandling),
+      m_auditService(auditService),
       m_volumeBuilder(std::make_unique<VolumeBuilder>(std::move(validationSettings)))
 {
 }
@@ -39,7 +41,7 @@ AppResult<std::shared_ptr<IVolumeData>> AdvancedSeriesVolumeService::buildDiagno
             "The selected series does not contain enough slices to build a diagnostic volume.");
     }
 
-    SeriesDataLoadService seriesDataLoadService(m_fileHandling);
+    SeriesDataLoadService seriesDataLoadService(m_fileHandling, m_auditService);
     const auto diagnosticSeriesResult = seriesDataLoadService.loadDiagnosticSeries(lightweightSeries);
     if (!diagnosticSeriesResult)
     {

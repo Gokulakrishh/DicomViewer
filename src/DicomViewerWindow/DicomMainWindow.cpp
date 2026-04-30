@@ -2,8 +2,11 @@
 
 #include <QAction>
 #include <QBuffer>
+#include <QCoreApplication>
+#include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QStandardPaths>
 #include <QDate>
 #include <QCheckBox>
 #include <QDockWidget>
@@ -31,6 +34,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "Audit/AuditService.h"
+#include "Audit/JsonlAuditSink.h"
 #include "AI/GeminiAiAssistantService.h"
 #include "AI/IAiAssistantService.h"
 #include "AI/QtHttpAiServerClient.h"
@@ -44,11 +49,27 @@
 #include "Database/PostgreService.h"
 #include "FileHandling/GDCMFileHandling.h"
 #include "Model/MedicalImage.h"
+#include "ViewerTools/WindowLevelPreset.h"
 #include "Services/AdvancedSeriesVolumeService.h"
 #include "Services/ThreeDProfiles/ThreeDProfileSelection.h"
 
 namespace
 {
+constexpr int kDicomWindowPresetBase = 1000;
+
+struct BuiltInViewportPresetMapping
+{
+    ViewportWindowPreset viewportPreset;
+    BuiltInWindowLevelPresetId builtInPreset;
+};
+
+constexpr std::array<BuiltInViewportPresetMapping, 4> kBuiltInViewportPresetMappings{{
+    {ViewportWindowPreset::Brain, BuiltInWindowLevelPresetId::Brain},
+    {ViewportWindowPreset::SoftTissue, BuiltInWindowLevelPresetId::SoftTissue},
+    {ViewportWindowPreset::Bone, BuiltInWindowLevelPresetId::Bone},
+    {ViewportWindowPreset::Lung, BuiltInWindowLevelPresetId::Lung},
+}};
+
 QString buildAdvancedViewerTitle(const QString& viewerName, const Series& selectedSeries)
 {
     QString title = viewerName;
@@ -61,6 +82,19 @@ QString buildAdvancedViewerTitle(const QString& viewerName, const Series& select
         title += " - " + selectedSeries.modality().trimmed();
     }
     return title;
+}
+
+QString resolveAuditFilePath()
+{
+    QString appDataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    if (appDataPath.trimmed().isEmpty())
+    {
+        appDataPath = QDir(QCoreApplication::applicationDirPath()).filePath("audit");
+    }
+
+    QDir directory(appDataPath);
+    directory.mkpath(".");
+    return directory.filePath("audit.jsonl");
 }
 }
 
@@ -138,14 +172,18 @@ void DicomMainWindow::setupCoreServices()
     m_cineTimer->setInterval(100);
 
     m_gdcmHandler = std::make_unique<GDCMFileHandling>();
+    m_auditService = std::make_unique<AuditService>();
+    m_auditService->addSink(std::make_shared<JsonlAuditSink>(resolveAuditFilePath()));
     m_advancedSeriesVolumeService = std::make_unique<AdvancedSeriesVolumeService>(
         *m_gdcmHandler,
-        m_appConfigService->loadVolumeValidationSettings());
+        m_appConfigService->loadVolumeValidationSettings(),
+        m_auditService.get());
     m_viewportController = std::make_unique<DicomViewportController>(
         m_gdcmHandler.get(),
         this);
     rebuildAiAssistantService();
     m_databaseService = std::make_unique<PostgreService>(m_appConfigService->loadDatabaseSettings());
+    m_measurementAnnotationStore = std::make_unique<MeasurementAnnotationStore>(*m_databaseService);
     if (m_treeController)
     {
         m_treeController->setDatabaseService(m_databaseService.get());
@@ -198,34 +236,29 @@ void DicomMainWindow::setupMenuBar()
 
 void DicomMainWindow::setupViewerToolbar()
 {
-    const auto presetValue = [](ViewportWindowPreset preset) {
-        return static_cast<int>(preset);
-    };
-
     m_viewerToolBar = addToolBar("Viewer");
     m_viewerToolBar->setMovable(false);
-
-    m_windowLevelToolAction = new QAction("WL/WW", this);
-    m_windowLevelToolAction->setCheckable(true);
-    m_viewerToolBar->addAction(m_windowLevelToolAction);
-    connect(m_windowLevelToolAction, &QAction::toggled, this, &DicomMainWindow::onWindowLevelToolToggled);
-
-    m_zoomToolAction = new QAction("Zoom", this);
-    m_zoomToolAction->setCheckable(true);
-    m_viewerToolBar->addAction(m_zoomToolAction);
-    connect(m_zoomToolAction, &QAction::toggled, this, &DicomMainWindow::onZoomToolToggled);
+    m_viewerToolPresentation = std::make_unique<ViewerToolPresentation>(
+        *m_viewerToolBar,
+        this);
+    m_viewerToolPresentation->setSelectionChangedCallback([this](std::optional<ViewerToolId>) {
+        applyViewerToolSelection();
+    });
+    m_windowLevelToolAction = m_viewerToolPresentation->action(ViewerToolId::WindowLevel);
+    m_zoomToolAction = m_viewerToolPresentation->action(ViewerToolId::Zoom);
+    m_panToolAction = m_viewerToolPresentation->action(ViewerToolId::Pan);
+    m_distanceMeasurementToolAction = m_viewerToolPresentation->action(ViewerToolId::Distance);
+    m_polylineMeasurementToolAction = m_viewerToolPresentation->action(ViewerToolId::Polyline);
+    m_angleMeasurementToolAction = m_viewerToolPresentation->action(ViewerToolId::Angle);
+    m_rectangleRoiMeasurementToolAction = m_viewerToolPresentation->action(ViewerToolId::RectangleRoi);
 
     m_viewerToolBar->addSeparator();
 
-    auto* presetLabel = new QLabel("Preset:", this);
+    auto* presetLabel = new QLabel("WL/WW Preset:", this);
     m_viewerToolBar->addWidget(presetLabel);
 
     m_windowLevelPresetComboBox = new QComboBox(this);
-    m_windowLevelPresetComboBox->addItem("Custom", presetValue(ViewportWindowPreset::Custom));
-    m_windowLevelPresetComboBox->addItem("Brain", presetValue(ViewportWindowPreset::Brain));
-    m_windowLevelPresetComboBox->addItem("Soft Tissue", presetValue(ViewportWindowPreset::SoftTissue));
-    m_windowLevelPresetComboBox->addItem("Bone", presetValue(ViewportWindowPreset::Bone));
-    m_windowLevelPresetComboBox->addItem("Lung", presetValue(ViewportWindowPreset::Lung));
+    rebuildWindowLevelPresetComboBox();
     m_viewerToolBar->addWidget(m_windowLevelPresetComboBox);
     connect(m_windowLevelPresetComboBox, &QComboBox::currentIndexChanged, this, &DicomMainWindow::onWindowLevelPresetSelected);
     syncViewerToolbarState();
@@ -248,6 +281,7 @@ void DicomMainWindow::setupConnections()
         connect(m_view, &VtkDiagnosticSliceView::cinePlaybackToggled, this, &DicomMainWindow::onCineToggled);
         connect(m_view, &VtkDiagnosticSliceView::wheelSliceNavigationRequested, this, &DicomMainWindow::onSliceWheelRequested);
         connect(m_view, &VtkDiagnosticSliceView::windowLevelDragDelta, this, &DicomMainWindow::onWindowLevelDragDelta);
+        connect(m_view, &VtkDiagnosticSliceView::sliceAnnotationsChanged, this, &DicomMainWindow::onSliceAnnotationsChanged);
     }
 
     if (m_cineTimer)
@@ -307,9 +341,13 @@ void DicomMainWindow::clearCurrentSeries()
     m_currentDoctorName.clear();
     m_currentModality.clear();
     m_currentStudyDate.clear();
+    m_activeSliceSopInstanceUid.clear();
+    m_loadedSliceAnnotationIds.clear();
     if (m_view)
     {
         m_view->setPatientInfoText({}, {}, {}, {}, {}, {});
+        m_view->setSliceAnnotationContext({}, {});
+        m_view->loadSliceAnnotations({});
     }
     m_resetViewerFitOnNextImage = true;
     syncViewerToolbarState();
@@ -417,6 +455,7 @@ void DicomMainWindow::displayCurrentSlice()
     {
     }
     applyImageAdjustments();
+    loadCurrentSliceAnnotations();
 
     const auto currentSeries = m_viewportController->currentSeries();
     if (m_view)
@@ -435,6 +474,40 @@ void DicomMainWindow::displayCurrentSlice()
                      .fileName()),
         4000);
     MemoryManagementDebug::logMainViewerSnapshot(m_viewportController.get(), m_view, "displayCurrentSlice");
+}
+
+void DicomMainWindow::loadCurrentSliceAnnotations()
+{
+    if (!m_view || !m_viewportController)
+    {
+        return;
+    }
+
+    const auto currentSeries = m_viewportController->currentSeries();
+    const DicomImage* currentImage = m_viewportController->currentImage();
+    if (!currentSeries || !currentImage)
+    {
+        m_activeSliceSopInstanceUid.clear();
+        m_loadedSliceAnnotationIds.clear();
+        m_view->setSliceAnnotationContext({}, {});
+        m_view->loadSliceAnnotations({});
+        return;
+    }
+
+    m_view->setSliceAnnotationContext(currentSeries->seriesInstanceUid(), currentImage->sopInstanceUid());
+    m_activeSliceSopInstanceUid = currentImage->sopInstanceUid();
+
+    const QList<SliceMeasurementAnnotationRecord> records = m_measurementAnnotationStore
+        ? m_measurementAnnotationStore->loadSliceAnnotations(m_activeSliceSopInstanceUid)
+        : QList<SliceMeasurementAnnotationRecord>{};
+
+    m_loadedSliceAnnotationIds.clear();
+    for (const SliceMeasurementAnnotationRecord& record : records)
+    {
+        m_loadedSliceAnnotationIds.insert(record.measurement.id);
+    }
+
+    m_view->loadSliceAnnotations(records);
 }
 
 void DicomMainWindow::loadSeries(const std::shared_ptr<Series>& series, int initialIndex)
@@ -487,6 +560,11 @@ void DicomMainWindow::loadAndDisplayImage(const QString& filePath)
     {
         auto singleImage = std::shared_ptr<DicomImage>(static_cast<DicomImage*>(loadedImage.release()));
         m_viewportController->setSingleImage(singleImage);
+        if (m_view)
+        {
+            m_view->setSliceAnnotationContext({}, {});
+            m_view->loadSliceAnnotations({});
+        }
         m_resetViewerFitOnNextImage = true;
         m_view->setSliceNavigationState(0, 1);
         m_view->setCineAvailable(false);
@@ -496,6 +574,7 @@ void DicomMainWindow::loadAndDisplayImage(const QString& filePath)
             m_treePanel->updatePreviewPane(createDicomPreviewPixmap(*singleImage));
         }
         applyImageAdjustments();
+        loadCurrentSliceAnnotations();
         MemoryManagementDebug::logMainViewerSnapshot(m_viewportController.get(), m_view, "loadAndDisplayImage-single");
         return;
     }
@@ -532,12 +611,22 @@ void DicomMainWindow::openMprViewer()
         return;
     }
     std::shared_ptr<IVolumeData> volume = volumeResult.value();
+    std::vector<DicomWindowPreset> dicomWindowPresets;
+    int activeDicomWindowPresetIndex = -1;
+    if (const DicomImage* currentImage = m_viewportController->currentImage();
+        currentImage && currentImage->metadata())
+    {
+        dicomWindowPresets = currentImage->metadata()->windowPresets;
+        activeDicomWindowPresetIndex = m_viewportController->currentDicomWindowPresetIndex();
+    }
 
     QWidget* viewer = m_advancedViewerLauncher->showMprVolume(
         std::move(volume),
         buildAdvancedViewerTitle("MPR Viewer", *selectedSeries),
         m_viewportController->currentWindowLevel(),
         m_viewportController->currentWindowWidth(),
+        std::move(dicomWindowPresets),
+        activeDicomWindowPresetIndex,
         this);
     loadingDialog.close();
     if (viewer)
@@ -1111,26 +1200,32 @@ void DicomMainWindow::onSliceWheelRequested(int stepCount)
     onImageSliderValueChanged(nextIndex);
 }
 
-void DicomMainWindow::onWindowLevelToolToggled(bool checked)
+void DicomMainWindow::applyViewerToolSelection()
 {
-    if (checked && m_zoomToolAction && m_zoomToolAction->isChecked())
+    if (!m_view)
     {
-        m_zoomToolAction->blockSignals(true);
-        m_zoomToolAction->setChecked(false);
-        m_zoomToolAction->blockSignals(false);
+        return;
     }
-    setViewerInteractionMode(checked, false);
+
+    const std::optional<ViewerToolId> activeTool = selectedViewerTool();
+    const bool windowLevelEnabled = activeTool && *activeTool == ViewerToolId::WindowLevel;
+    const bool zoomEnabled = activeTool && *activeTool == ViewerToolId::Zoom;
+    const bool panEnabled = activeTool && *activeTool == ViewerToolId::Pan;
+    const bool distanceEnabled = activeTool && *activeTool == ViewerToolId::Distance;
+    const bool polylineEnabled = activeTool && *activeTool == ViewerToolId::Polyline;
+    const bool angleEnabled = activeTool && *activeTool == ViewerToolId::Angle;
+    const bool rectangleRoiEnabled = activeTool && *activeTool == ViewerToolId::RectangleRoi;
+
+    setViewerInteractionMode(windowLevelEnabled, zoomEnabled, panEnabled);
+    m_view->setDistanceMeasurementEnabled(distanceEnabled);
+    m_view->setPolylineMeasurementEnabled(polylineEnabled);
+    m_view->setAngleMeasurementEnabled(angleEnabled);
+    m_view->setRectangleRoiMeasurementEnabled(rectangleRoiEnabled);
 }
 
-void DicomMainWindow::onZoomToolToggled(bool checked)
+std::optional<ViewerToolId> DicomMainWindow::selectedViewerTool() const
 {
-    if (checked && m_windowLevelToolAction && m_windowLevelToolAction->isChecked())
-    {
-        m_windowLevelToolAction->blockSignals(true);
-        m_windowLevelToolAction->setChecked(false);
-        m_windowLevelToolAction->blockSignals(false);
-    }
-    setViewerInteractionMode(false, checked);
+    return m_viewerToolPresentation ? m_viewerToolPresentation->activeTool() : std::nullopt;
 }
 
 void DicomMainWindow::onWindowLevelPresetSelected()
@@ -1140,7 +1235,19 @@ void DicomMainWindow::onWindowLevelPresetSelected()
         return;
     }
 
-    const auto selectedPreset = static_cast<ViewportWindowPreset>(m_windowLevelPresetComboBox->currentData().toInt());
+    const int selectedValue = m_windowLevelPresetComboBox->currentData().toInt();
+    if (selectedValue >= kDicomWindowPresetBase)
+    {
+        if (!m_viewportController->applyDicomWindowPreset(selectedValue - kDicomWindowPresetBase))
+        {
+            return;
+        }
+
+        applyImageAdjustments();
+        return;
+    }
+
+    const auto selectedPreset = static_cast<ViewportWindowPreset>(selectedValue);
     if (selectedPreset == ViewportWindowPreset::Custom)
     {
         m_viewportController->resetPreset();
@@ -1256,6 +1363,40 @@ void DicomMainWindow::onTreeFileSelectionRequested(const QString& filePath)
 
     clearCurrentSeries();
     loadAndDisplayImage(filePath);
+}
+
+void DicomMainWindow::onSliceAnnotationsChanged(const QList<SliceMeasurementAnnotationRecord>& records)
+{
+    if (!m_measurementAnnotationStore || m_activeSliceSopInstanceUid.isEmpty())
+    {
+        return;
+    }
+
+    QSet<QString> currentAnnotationIds;
+    for (const SliceMeasurementAnnotationRecord& record : records)
+    {
+        if (record.measurement.id.isEmpty())
+        {
+            continue;
+        }
+
+        currentAnnotationIds.insert(record.measurement.id);
+        if (!m_measurementAnnotationStore->upsertSliceAnnotation(record))
+        {
+            statusBar()->showMessage("Failed to save slice annotation.", 4000);
+        }
+    }
+
+    const QSet<QString> removedAnnotationIds = m_loadedSliceAnnotationIds - currentAnnotationIds;
+    for (const QString& annotationId : removedAnnotationIds)
+    {
+        if (!m_measurementAnnotationStore->deleteSliceAnnotation(annotationId))
+        {
+            statusBar()->showMessage("Failed to delete slice annotation.", 4000);
+        }
+    }
+
+    m_loadedSliceAnnotationIds = currentAnnotationIds;
 }
 
 void DicomMainWindow::onFolderImportFinished()
@@ -1392,7 +1533,7 @@ void DicomMainWindow::setupAiDock()
     refreshAiDockState();
 }
 
-void DicomMainWindow::setViewerInteractionMode(bool windowLevelEnabled, bool zoomEnabled)
+void DicomMainWindow::setViewerInteractionMode(bool windowLevelEnabled, bool zoomEnabled, bool panEnabled)
 {
     if (!m_view)
     {
@@ -1401,11 +1542,21 @@ void DicomMainWindow::setViewerInteractionMode(bool windowLevelEnabled, bool zoo
 
     m_view->setWindowLevelInteractionEnabled(windowLevelEnabled);
     m_view->setZoomInteractionEnabled(zoomEnabled);
+    m_view->setPanInteractionEnabled(panEnabled);
+    if (windowLevelEnabled || zoomEnabled || panEnabled)
+    {
+        m_view->setDistanceMeasurementEnabled(false);
+        m_view->setPolylineMeasurementEnabled(false);
+        m_view->setAngleMeasurementEnabled(false);
+        m_view->setRectangleRoiMeasurementEnabled(false);
+    }
 }
 
 void DicomMainWindow::syncViewerToolbarState()
 {
-    if (!m_windowLevelToolAction || !m_zoomToolAction || !m_windowLevelPresetComboBox || !m_view)
+    if (!m_windowLevelToolAction || !m_zoomToolAction || !m_panToolAction || !m_distanceMeasurementToolAction ||
+        !m_polylineMeasurementToolAction || !m_angleMeasurementToolAction || !m_rectangleRoiMeasurementToolAction ||
+        !m_windowLevelPresetComboBox || !m_view)
     {
         return;
     }
@@ -1413,22 +1564,82 @@ void DicomMainWindow::syncViewerToolbarState()
     const bool hasImage = m_viewportController && m_viewportController->currentImage();
     if (!hasImage)
     {
-        m_windowLevelToolAction->blockSignals(true);
-        m_windowLevelToolAction->setChecked(false);
-        m_windowLevelToolAction->blockSignals(false);
-        m_zoomToolAction->blockSignals(true);
-        m_zoomToolAction->setChecked(false);
-        m_zoomToolAction->blockSignals(false);
-        setViewerInteractionMode(false, false);
+        if (m_viewerToolPresentation)
+        {
+            m_viewerToolPresentation->setActiveTool(std::nullopt);
+        }
+        setViewerInteractionMode(false, false, false);
+        m_view->setDistanceMeasurementEnabled(false);
+        m_view->setPolylineMeasurementEnabled(false);
+        m_view->setAngleMeasurementEnabled(false);
+        m_view->setRectangleRoiMeasurementEnabled(false);
     }
-    m_windowLevelToolAction->setEnabled(hasImage);
-    m_zoomToolAction->setEnabled(hasImage);
+    if (m_viewerToolPresentation)
+    {
+        m_viewerToolPresentation->setToolEnabled(ViewerToolId::WindowLevel, hasImage);
+        m_viewerToolPresentation->setToolEnabled(ViewerToolId::Zoom, hasImage);
+        m_viewerToolPresentation->setToolEnabled(ViewerToolId::Pan, hasImage);
+        m_viewerToolPresentation->setToolEnabled(ViewerToolId::Distance, hasImage);
+        m_viewerToolPresentation->setToolEnabled(ViewerToolId::Polyline, hasImage);
+        m_viewerToolPresentation->setToolEnabled(ViewerToolId::Angle, hasImage);
+        m_viewerToolPresentation->setToolEnabled(ViewerToolId::RectangleRoi, hasImage);
+    }
     m_windowLevelPresetComboBox->setEnabled(hasImage);
 
-    const int presetValue = static_cast<int>(hasImage ? m_viewportController->currentPreset() : ViewportWindowPreset::Custom);
+    rebuildWindowLevelPresetComboBox();
+    int presetValue = static_cast<int>(hasImage ? m_viewportController->currentPreset() : ViewportWindowPreset::Custom);
+    if (hasImage && m_viewportController->currentDicomWindowPresetIndex() >= 0)
+    {
+        presetValue = kDicomWindowPresetBase + m_viewportController->currentDicomWindowPresetIndex();
+    }
     const int comboIndex = std::max(0, m_windowLevelPresetComboBox->findData(presetValue));
     m_windowLevelPresetComboBox->blockSignals(true);
     m_windowLevelPresetComboBox->setCurrentIndex(comboIndex);
+    m_windowLevelPresetComboBox->blockSignals(false);
+}
+
+void DicomMainWindow::rebuildWindowLevelPresetComboBox()
+{
+    if (!m_windowLevelPresetComboBox)
+    {
+        return;
+    }
+
+    const int currentValue = m_windowLevelPresetComboBox->currentData().toInt();
+    m_windowLevelPresetComboBox->blockSignals(true);
+    m_windowLevelPresetComboBox->clear();
+    m_windowLevelPresetComboBox->addItem("Custom", static_cast<int>(ViewportWindowPreset::Custom));
+
+    if (m_viewportController)
+    {
+        const int dicomPresetCount = m_viewportController->dicomWindowPresetCount();
+        for (int index = 0; index < dicomPresetCount; ++index)
+        {
+            const QString label = m_viewportController->dicomWindowPresetLabel(index);
+            m_windowLevelPresetComboBox->addItem(
+                label.isEmpty() ? QString("DICOM %1").arg(index + 1) : label,
+                kDicomWindowPresetBase + index);
+        }
+
+        if (dicomPresetCount > 0)
+        {
+            m_windowLevelPresetComboBox->insertSeparator(m_windowLevelPresetComboBox->count());
+        }
+    }
+
+    for (const auto& mapping : kBuiltInViewportPresetMappings)
+    {
+        const auto preset = windowLevelPreset(mapping.builtInPreset);
+        m_windowLevelPresetComboBox->addItem(
+            windowLevelPresetLabel(preset),
+            static_cast<int>(mapping.viewportPreset));
+    }
+
+    const int restoredIndex = m_windowLevelPresetComboBox->findData(currentValue);
+    if (restoredIndex >= 0)
+    {
+        m_windowLevelPresetComboBox->setCurrentIndex(restoredIndex);
+    }
     m_windowLevelPresetComboBox->blockSignals(false);
 }
 
@@ -1441,21 +1652,19 @@ void DicomMainWindow::applyImageAdjustments()
         return;
     }
 
-    const int windowLevel = m_viewportController->currentWindowLevel();
-    const int windowWidth = m_viewportController->currentWindowWidth();
-    m_view->setWindowLevelWidth(windowLevel, windowWidth);
-
+    const auto windowState = m_viewportController->windowControlState(false);
     const DicomImage* currentImage = m_viewportController->currentImage();
-    if (!currentImage)
+    if (!windowState.hasImage || !currentImage)
     {
         m_view->clearImage();
         syncViewerToolbarState();
         return;
     }
 
+    m_view->setWindowLevelWidth(windowState.level, windowState.width);
     if (currentImage->hasRawPixels())
     {
-        displayImageInViewer(*currentImage, windowLevel, windowWidth);
+        displayImageInViewer(*currentImage, windowState.level, windowState.width);
         syncViewerToolbarState();
         return;
     }

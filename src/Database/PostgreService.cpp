@@ -4,11 +4,116 @@
 
 #include <QBuffer>
 #include <QDebug>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QPixmap>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QVariant>
+
+namespace
+{
+QString measurementTypeToString(MeasurementType type)
+{
+    switch (type)
+    {
+    case MeasurementType::Distance:
+        return "distance";
+    case MeasurementType::Polyline:
+        return "polyline";
+    case MeasurementType::Angle:
+        return "angle";
+    case MeasurementType::RectangleRoi:
+        return "rectangle_roi";
+    }
+
+    return "distance";
+}
+
+MeasurementType measurementTypeFromString(const QString& value)
+{
+    if (value == "polyline")
+    {
+        return MeasurementType::Polyline;
+    }
+    if (value == "angle")
+    {
+        return MeasurementType::Angle;
+    }
+    if (value == "rectangle_roi")
+    {
+        return MeasurementType::RectangleRoi;
+    }
+    return MeasurementType::Distance;
+}
+
+QString pointsToJson(const QVector<MeasurementPoint>& points)
+{
+    QJsonArray pointArray;
+    for (const MeasurementPoint& point : points)
+    {
+        QJsonObject object;
+        object.insert("x", point.x);
+        object.insert("y", point.y);
+        object.insert("z", point.z);
+        pointArray.append(object);
+    }
+
+    return QString::fromUtf8(QJsonDocument(pointArray).toJson(QJsonDocument::Compact));
+}
+
+QVector<MeasurementPoint> pointsFromJson(const QString& json)
+{
+    QVector<MeasurementPoint> points;
+    const QJsonDocument document = QJsonDocument::fromJson(json.toUtf8());
+    if (!document.isArray())
+    {
+        return points;
+    }
+
+    const QJsonArray pointArray = document.array();
+    points.reserve(pointArray.size());
+    for (const QJsonValue& pointValue : pointArray)
+    {
+        if (!pointValue.isObject())
+        {
+            continue;
+        }
+
+        const QJsonObject object = pointValue.toObject();
+        MeasurementPoint point;
+        point.x = object.value("x").toDouble();
+        point.y = object.value("y").toDouble();
+        point.z = object.value("z").toDouble();
+        points.append(point);
+    }
+
+    return points;
+}
+
+QVariant nullableDouble(const std::optional<double>& value)
+{
+    return value ? QVariant(*value) : QVariant(QMetaType(QMetaType::Double));
+}
+
+QVariant nullableInteger(const std::optional<int>& value)
+{
+    return value ? QVariant(*value) : QVariant(QMetaType(QMetaType::Int));
+}
+
+std::optional<double> optionalDoubleFromQuery(const QSqlQuery& query, const char* fieldName)
+{
+    const QVariant value = query.value(fieldName);
+    if (!value.isValid() || value.isNull())
+    {
+        return std::nullopt;
+    }
+
+    return value.toDouble();
+}
+}
 
 PostgreService::PostgreService(const DatabaseSettings& databaseSettings)
     : m_connection(std::make_unique<PostgreConnection>(databaseSettings))
@@ -233,8 +338,8 @@ QList<DatabaseService::SeriesPtr> PostgreService::getSeriesForStudy(const QStrin
     const QString normalizedFilter = filterText.trimmed().toLower();
     QString queryText =
         "SELECT s.series_instance_uid, s.series_description, s.modality, s.series_number, "
-        "(SELECT COUNT(*) FROM dicom_images di WHERE di.series_instance_uid = s.series_instance_uid) AS image_count, "
-        "(SELECT file_path FROM dicom_images di "
+        "(SELECT COUNT(*) FROM dicom_slice_metadata di WHERE di.series_instance_uid = s.series_instance_uid) AS image_count, "
+        "(SELECT file_path FROM dicom_slice_metadata di "
         " WHERE di.series_instance_uid = s.series_instance_uid "
         " ORDER BY "
         " CASE WHEN instance_number ~ '^[0-9]+$' THEN instance_number::INTEGER END NULLS LAST, "
@@ -314,8 +419,8 @@ DatabaseService::SeriesPtr PostgreService::getSeries(const QString& seriesInstan
     QSqlQuery query(m_connection->database());
     query.prepare(
         "SELECT s.series_instance_uid, s.series_description, s.modality, s.series_number, s.preview_png, "
-        "(SELECT COUNT(*) FROM dicom_images di WHERE di.series_instance_uid = s.series_instance_uid) AS image_count, "
-        "(SELECT file_path FROM dicom_images di "
+        "(SELECT COUNT(*) FROM dicom_slice_metadata di WHERE di.series_instance_uid = s.series_instance_uid) AS image_count, "
+        "(SELECT file_path FROM dicom_slice_metadata di "
         " WHERE di.series_instance_uid = s.series_instance_uid "
         " ORDER BY "
         " CASE WHEN instance_number ~ '^[0-9]+$' THEN instance_number::INTEGER END NULLS LAST, "
@@ -357,7 +462,7 @@ DatabaseService::DicomImagePtr PostgreService::getImage(const QString& sopInstan
     QSqlQuery query(m_connection->database());
     query.prepare(
         "SELECT sop_instance_uid, file_path, instance_number, image_width, image_height "
-        "FROM dicom_images WHERE sop_instance_uid = :sop_instance_uid");
+        "FROM dicom_slice_metadata WHERE sop_instance_uid = :sop_instance_uid");
     query.bindValue(":sop_instance_uid", sopInstanceUid);
 
     if (!query.exec() || !query.next())
@@ -366,6 +471,175 @@ DatabaseService::DicomImagePtr PostgreService::getImage(const QString& sopInstan
     }
 
     return createImageFromQuery(query);
+}
+
+bool PostgreService::upsertSliceMeasurementAnnotation(const SliceMeasurementAnnotationRecord& record)
+{
+    if (record.seriesInstanceUid.isEmpty()
+        || record.sopInstanceUid.isEmpty()
+        || record.measurement.id.isEmpty()
+        || !ensureConnection())
+    {
+        return false;
+    }
+
+    const QDateTime createdAtUtc = record.createdAtUtc.isValid()
+        ? record.createdAtUtc.toUTC()
+        : QDateTime::currentDateTimeUtc();
+    const QDateTime updatedAtUtc = record.updatedAtUtc.isValid()
+        ? record.updatedAtUtc.toUTC()
+        : QDateTime::currentDateTimeUtc();
+
+    QSqlQuery query(m_connection->database());
+    query.prepare(
+        "INSERT INTO measurement_annotations ("
+        "annotation_id, series_instance_uid, sop_instance_uid, measurement_type, points_json, color_hex, "
+        "length_mm, angle_degrees, area_mm2, sample_count, mean_value, stddev_value, min_value, max_value, "
+        "created_at, updated_at, is_deleted) "
+        "VALUES ("
+        ":annotation_id, :series_instance_uid, :sop_instance_uid, :measurement_type, :points_json, :color_hex, "
+        ":length_mm, :angle_degrees, :area_mm2, :sample_count, :mean_value, :stddev_value, :min_value, :max_value, "
+        ":created_at, :updated_at, :is_deleted) "
+        "ON CONFLICT (annotation_id) DO UPDATE SET "
+        "series_instance_uid = EXCLUDED.series_instance_uid, "
+        "sop_instance_uid = EXCLUDED.sop_instance_uid, "
+        "measurement_type = EXCLUDED.measurement_type, "
+        "points_json = EXCLUDED.points_json, "
+        "color_hex = EXCLUDED.color_hex, "
+        "length_mm = EXCLUDED.length_mm, "
+        "angle_degrees = EXCLUDED.angle_degrees, "
+        "area_mm2 = EXCLUDED.area_mm2, "
+        "sample_count = EXCLUDED.sample_count, "
+        "mean_value = EXCLUDED.mean_value, "
+        "stddev_value = EXCLUDED.stddev_value, "
+        "min_value = EXCLUDED.min_value, "
+        "max_value = EXCLUDED.max_value, "
+        "updated_at = EXCLUDED.updated_at, "
+        "is_deleted = EXCLUDED.is_deleted");
+    query.bindValue(":annotation_id", record.measurement.id);
+    query.bindValue(":series_instance_uid", record.seriesInstanceUid);
+    query.bindValue(":sop_instance_uid", record.sopInstanceUid);
+    query.bindValue(":measurement_type", measurementTypeToString(record.measurement.type));
+    query.bindValue(":points_json", pointsToJson(record.measurement.points));
+    query.bindValue(":color_hex", record.measurement.color.name(QColor::HexRgb));
+    query.bindValue(":length_mm", record.measurement.lengthMm);
+    query.bindValue(":angle_degrees", nullableDouble(record.angleDegrees));
+    query.bindValue(
+        ":area_mm2",
+        record.roiStatistics ? QVariant(record.roiStatistics->areaMm2) : QVariant(QMetaType(QMetaType::Double)));
+    query.bindValue(
+        ":sample_count",
+        record.roiStatistics
+            ? QVariant(record.roiStatistics->sampleCount)
+            : nullableInteger(std::nullopt));
+    query.bindValue(
+        ":mean_value",
+        record.roiStatistics ? QVariant(record.roiStatistics->mean) : QVariant(QMetaType(QMetaType::Double)));
+    query.bindValue(
+        ":stddev_value",
+        record.roiStatistics
+            ? QVariant(record.roiStatistics->standardDeviation)
+            : QVariant(QMetaType(QMetaType::Double)));
+    query.bindValue(
+        ":min_value",
+        record.roiStatistics ? QVariant(record.roiStatistics->minimum) : QVariant(QMetaType(QMetaType::Double)));
+    query.bindValue(
+        ":max_value",
+        record.roiStatistics ? QVariant(record.roiStatistics->maximum) : QVariant(QMetaType(QMetaType::Double)));
+    query.bindValue(":created_at", createdAtUtc);
+    query.bindValue(":updated_at", updatedAtUtc);
+    query.bindValue(":is_deleted", record.deleted);
+
+    if (!query.exec())
+    {
+        qWarning() << "Failed to save measurement annotation:" << query.lastError().text();
+        return false;
+    }
+
+    return true;
+}
+
+QList<SliceMeasurementAnnotationRecord> PostgreService::loadSliceMeasurementAnnotations(const QString& sopInstanceUid)
+{
+    QList<SliceMeasurementAnnotationRecord> records;
+    if (sopInstanceUid.isEmpty() || !ensureConnection())
+    {
+        return records;
+    }
+
+    QSqlQuery query(m_connection->database());
+    query.prepare(
+        "SELECT annotation_id, series_instance_uid, sop_instance_uid, measurement_type, points_json, color_hex, "
+        "length_mm, angle_degrees, area_mm2, sample_count, mean_value, stddev_value, min_value, max_value, "
+        "created_at, updated_at, is_deleted "
+        "FROM measurement_annotations "
+        "WHERE sop_instance_uid = :sop_instance_uid AND is_deleted = FALSE "
+        "ORDER BY created_at, annotation_id");
+    query.bindValue(":sop_instance_uid", sopInstanceUid);
+
+    if (!query.exec())
+    {
+        qWarning() << "Failed to load measurement annotations:" << query.lastError().text();
+        return records;
+    }
+
+    while (query.next())
+    {
+        SliceMeasurementAnnotationRecord record;
+        record.seriesInstanceUid = query.value("series_instance_uid").toString();
+        record.sopInstanceUid = query.value("sop_instance_uid").toString();
+        record.measurement.id = query.value("annotation_id").toString();
+        record.measurement.type = measurementTypeFromString(query.value("measurement_type").toString());
+        record.measurement.points = pointsFromJson(query.value("points_json").toString());
+        record.measurement.color = QColor(query.value("color_hex").toString());
+        record.measurement.lengthMm = query.value("length_mm").toDouble();
+        record.angleDegrees = optionalDoubleFromQuery(query, "angle_degrees");
+        record.createdAtUtc = query.value("created_at").toDateTime().toUTC();
+        record.updatedAtUtc = query.value("updated_at").toDateTime().toUTC();
+        record.deleted = query.value("is_deleted").toBool();
+
+        const QVariant sampleCountValue = query.value("sample_count");
+        if (sampleCountValue.isValid() && !sampleCountValue.isNull())
+        {
+            RoiStatistics stats;
+            stats.valid = true;
+            stats.sampleCount = sampleCountValue.toInt();
+            stats.mean = query.value("mean_value").toDouble();
+            stats.standardDeviation = query.value("stddev_value").toDouble();
+            stats.minimum = query.value("min_value").toDouble();
+            stats.maximum = query.value("max_value").toDouble();
+            stats.areaMm2 = query.value("area_mm2").toDouble();
+            record.roiStatistics = stats;
+        }
+
+        records.append(record);
+    }
+
+    return records;
+}
+
+bool PostgreService::markSliceMeasurementAnnotationDeleted(const QString& annotationId)
+{
+    if (annotationId.isEmpty() || !ensureConnection())
+    {
+        return false;
+    }
+
+    QSqlQuery query(m_connection->database());
+    query.prepare(
+        "UPDATE measurement_annotations "
+        "SET is_deleted = TRUE, updated_at = :updated_at "
+        "WHERE annotation_id = :annotation_id");
+    query.bindValue(":updated_at", QDateTime::currentDateTimeUtc());
+    query.bindValue(":annotation_id", annotationId);
+
+    if (!query.exec())
+    {
+        qWarning() << "Failed to soft-delete measurement annotation:" << query.lastError().text();
+        return false;
+    }
+
+    return query.numRowsAffected() > 0;
 }
 
 QPixmap PostgreService::getPreviewForPatient(const QString& patientId)
@@ -499,13 +773,32 @@ bool PostgreService::createTables()
         "series_number TEXT,"
         "preview_png BYTEA"
         ")",
-        "CREATE TABLE IF NOT EXISTS dicom_images ("
+        "CREATE TABLE IF NOT EXISTS dicom_slice_metadata ("
         "sop_instance_uid TEXT PRIMARY KEY,"
         "series_instance_uid TEXT NOT NULL REFERENCES series(series_instance_uid) ON DELETE CASCADE,"
         "file_path TEXT NOT NULL UNIQUE,"
         "instance_number TEXT,"
         "image_width INTEGER NOT NULL,"
         "image_height INTEGER NOT NULL"
+        ")",
+        "CREATE TABLE IF NOT EXISTS measurement_annotations ("
+        "annotation_id TEXT PRIMARY KEY,"
+        "series_instance_uid TEXT NOT NULL REFERENCES series(series_instance_uid) ON DELETE CASCADE,"
+        "sop_instance_uid TEXT NOT NULL REFERENCES dicom_slice_metadata(sop_instance_uid) ON DELETE CASCADE,"
+        "measurement_type TEXT NOT NULL,"
+        "points_json TEXT NOT NULL,"
+        "color_hex TEXT NOT NULL,"
+        "length_mm DOUBLE PRECISION,"
+        "angle_degrees DOUBLE PRECISION,"
+        "area_mm2 DOUBLE PRECISION,"
+        "sample_count INTEGER,"
+        "mean_value DOUBLE PRECISION,"
+        "stddev_value DOUBLE PRECISION,"
+        "min_value DOUBLE PRECISION,"
+        "max_value DOUBLE PRECISION,"
+        "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),"
+        "updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),"
+        "is_deleted BOOLEAN NOT NULL DEFAULT FALSE"
         ")"
     };
 
@@ -515,6 +808,25 @@ bool PostgreService::createTables()
         if (!query.exec(QString::fromUtf8(statement)))
         {
             qWarning() << "Failed to create PostgreSQL table:" << query.lastError().text();
+            return false;
+        }
+    }
+
+    static const char* indexStatements[] = {
+        "CREATE INDEX IF NOT EXISTS idx_dicom_slice_metadata_series_instance_uid "
+        "ON dicom_slice_metadata(series_instance_uid)",
+        "CREATE INDEX IF NOT EXISTS idx_measurement_annotations_sop_instance_uid "
+        "ON measurement_annotations(sop_instance_uid)",
+        "CREATE INDEX IF NOT EXISTS idx_measurement_annotations_series_sop "
+        "ON measurement_annotations(series_instance_uid, sop_instance_uid)"
+    };
+
+    for (const char* statement : indexStatements)
+    {
+        QSqlQuery query(m_connection->database());
+        if (!query.exec(QString::fromUtf8(statement)))
+        {
+            qWarning() << "Failed to create PostgreSQL index:" << query.lastError().text();
             return false;
         }
     }
@@ -605,7 +917,7 @@ bool PostgreService::saveImage(const QString& seriesInstanceUid, const DicomImag
 {
     QSqlQuery query(m_connection->database());
     query.prepare(
-        "INSERT INTO dicom_images (sop_instance_uid, series_instance_uid, file_path, instance_number, image_width, image_height) "
+        "INSERT INTO dicom_slice_metadata (sop_instance_uid, series_instance_uid, file_path, instance_number, image_width, image_height) "
         "VALUES (:sop_instance_uid, :series_instance_uid, :file_path, :instance_number, :image_width, :image_height) "
         "ON CONFLICT (sop_instance_uid) DO UPDATE SET "
         "series_instance_uid = EXCLUDED.series_instance_uid, "
@@ -657,8 +969,8 @@ void PostgreService::populateSeries(Study& study)
     QSqlQuery query(m_connection->database());
     query.prepare(
         "SELECT s.series_instance_uid, s.series_description, s.modality, s.series_number, s.preview_png, "
-        "(SELECT COUNT(*) FROM dicom_images di WHERE di.series_instance_uid = s.series_instance_uid) AS image_count, "
-        "(SELECT file_path FROM dicom_images di "
+        "(SELECT COUNT(*) FROM dicom_slice_metadata di WHERE di.series_instance_uid = s.series_instance_uid) AS image_count, "
+        "(SELECT file_path FROM dicom_slice_metadata di "
         " WHERE di.series_instance_uid = s.series_instance_uid "
         " ORDER BY "
         " CASE WHEN instance_number ~ '^[0-9]+$' THEN instance_number::INTEGER END NULLS LAST, "
@@ -696,7 +1008,7 @@ void PostgreService::populateImages(Series& series)
     QSqlQuery query(m_connection->database());
     query.prepare(
         "SELECT sop_instance_uid, file_path, instance_number, image_width, image_height "
-        "FROM dicom_images WHERE series_instance_uid = :series_instance_uid "
+        "FROM dicom_slice_metadata WHERE series_instance_uid = :series_instance_uid "
         "ORDER BY "
         "CASE WHEN instance_number ~ '^[0-9]+$' THEN instance_number::INTEGER END NULLS LAST, "
         "instance_number, "

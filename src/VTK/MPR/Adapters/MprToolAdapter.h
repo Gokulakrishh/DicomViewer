@@ -13,6 +13,7 @@ public:
     void handleCrosshairInput(const ViewerInputEvent& event) override;
     void handleWindowLevelInput(const ViewerInputEvent& event) override;
     void handleZoomInput(const ViewerInputEvent& event) override;
+    void handlePanInput(const ViewerInputEvent& event) override;
 
 private:
     MprController& m_controller;

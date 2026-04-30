@@ -13,6 +13,11 @@ enum class MprToolType
     Crosshair,
     WindowLevel,
     Zoom,
+    Pan,
+    DistanceMeasurement,
+    PolylineMeasurement,
+    AngleMeasurement,
+    RectangleRoiMeasurement,
     Slice
 };
 

@@ -4,9 +4,11 @@
 #include "VTK/Adapters/VtkVolumeAdapter.h"
 #include "VTK/MPR/Adapters/MprToolAdapter.h"
 #include "VTK/MPR/Adapters/VtkMprSceneAdapter.h"
-#include "VTK/MPR/Sync/MprSynchronizationService.h"
+#include "VTK/MPR/MprMeasurementScalarSource.h"
 #include "VTK/MPR/View/VtkSliceMprPaneView.h"
 #include "VTK/MPR/View/VtkThreeDReferencePaneView.h"
+#include "ViewerTools/Measurements/MeasurementAnalyticsService.h"
+#include "ViewerTools/ViewerInputEvent.h"
 
 #include <QMouseEvent>
 #include <QEvent>
@@ -31,7 +33,7 @@ VtkMprView::VtkMprView(
       m_controller(m_scene),
       m_sceneAdapter(std::make_unique<VtkMprSceneAdapter>()),
       m_toolAdapter(std::make_unique<MprToolAdapter>(m_controller, *m_sceneAdapter)),
-      m_toolController(m_scene, m_controller, *m_toolAdapter),
+      m_toolController(m_scene, m_controller, m_measurementService, *this, *m_toolAdapter),
       m_interactionRouter(m_toolController, m_controller)
 {
     Q_UNUSED(initialWindowLevel);
@@ -48,7 +50,13 @@ VtkMprView::~VtkMprView() = default;
 
 void VtkMprView::setActiveTool(MprToolType toolType)
 {
+    if (m_scene.activeTool() != toolType)
+    {
+        m_measurementService.cancelActiveMeasurement();
+        refreshMeasurementOverlays();
+    }
     m_toolController.setActiveTool(toolType);
+    updateCursorState();
 }
 
 void VtkMprView::setWindowLevelWidth(int level, int width)
@@ -124,6 +132,21 @@ bool VtkMprView::eventFilter(QObject* watched, QEvent* event)
 
     switch (m_scene.activeTool())
     {
+    case MprToolType::Pan:
+        if (handlePanEvent(watched, event, plane))
+        {
+            return true;
+        }
+        return QWidget::eventFilter(watched, event);
+    case MprToolType::DistanceMeasurement:
+    case MprToolType::PolylineMeasurement:
+    case MprToolType::AngleMeasurement:
+    case MprToolType::RectangleRoiMeasurement:
+        if (handleMeasurementEvent(watched, event, plane))
+        {
+            return true;
+        }
+        return QWidget::eventFilter(watched, event);
     case MprToolType::None:
     case MprToolType::Crosshair:
     case MprToolType::WindowLevel:
@@ -156,7 +179,7 @@ bool VtkMprView::eventFilter(QObject* watched, QEvent* event)
                     currentPosition,
                     currentPosition - m_lastInteractionPosition);
                 m_lastInteractionPosition = currentPosition;
-                updatePaneStatusText();
+                refreshOverlayState();
                 event->accept();
                 return true;
             }
@@ -218,20 +241,19 @@ void VtkMprView::refreshOverlayState()
 
     const MprCursorPositionWorld position = m_scene.cursorPosition();
     m_axialPane->setCrosshairPosition(
-        MprSynchronizationService::normalizedPositionForPlane(
-            *m_imageData,
-            position,
-            MprSlicePlane::Axial));
+        normalizedCrosshairPositionForPane(*m_axialPane, MprSlicePlane::Axial, position));
     m_coronalPane->setCrosshairPosition(
-        MprSynchronizationService::normalizedPositionForPlane(
-            *m_imageData,
-            position,
-            MprSlicePlane::Coronal));
+        normalizedCrosshairPositionForPane(*m_coronalPane, MprSlicePlane::Coronal, position));
     m_sagittalPane->setCrosshairPosition(
-        MprSynchronizationService::normalizedPositionForPlane(
-            *m_imageData,
-            position,
-            MprSlicePlane::Sagittal));
+        normalizedCrosshairPositionForPane(*m_sagittalPane, MprSlicePlane::Sagittal, position));
+    refreshMeasurementOverlays();
+}
+
+void VtkMprView::refreshMeasurementOverlays()
+{
+    m_axialPane->setMeasurements(displayMeasurementsForPane(*m_axialPane, MprSlicePlane::Axial));
+    m_coronalPane->setMeasurements(displayMeasurementsForPane(*m_coronalPane, MprSlicePlane::Coronal));
+    m_sagittalPane->setMeasurements(displayMeasurementsForPane(*m_sagittalPane, MprSlicePlane::Sagittal));
 }
 
 void VtkMprView::updatePaneStatusText()
@@ -249,15 +271,15 @@ void VtkMprView::updatePaneStatusText()
     m_sagittalPane->setSliceText(QString("Slice: %1").arg(m_sceneAdapter->currentSlice(MprSlicePlane::Sagittal)));
 
     m_axialPane->setWindowLevelText(
-        QString("WL/WW: %1 / %2")
+        QString("WL: %1 WW: %2")
             .arg(wl)
             .arg(ww));
     m_coronalPane->setWindowLevelText(
-        QString("WL/WW: %1 / %2")
+        QString("WL: %1 WW: %2")
             .arg(wl)
             .arg(ww));
     m_sagittalPane->setWindowLevelText(
-        QString("WL/WW: %1 / %2")
+        QString("WL: %1 WW: %2")
             .arg(wl)
             .arg(ww));
     m_axialPane->setZoomText(QString("Zoom: %1%").arg(m_sceneAdapter->zoomPercent(MprSlicePlane::Axial)));
@@ -295,9 +317,347 @@ QPointF VtkMprView::normalizedPositionForEvent(QObject* watched, const QPointF& 
         return {0.5, 0.5};
     }
 
+    if (m_scene.activeTool() == MprToolType::None ||
+        m_scene.activeTool() == MprToolType::Crosshair)
+    {
+        return m_sceneAdapter->normalizedImagePositionFromDisplayPosition(
+            planeForRenderWidget(watched),
+            position,
+            widget->size(),
+            m_scene.cursorPosition());
+    }
+
     return {
         std::clamp(position.x() / static_cast<double>(widget->width()), 0.0, 1.0),
         std::clamp(position.y() / static_cast<double>(widget->height()), 0.0, 1.0)};
+}
+
+QPointF VtkMprView::normalizedCrosshairPositionForPane(
+    VtkSliceMprPaneView& pane,
+    MprSlicePlane plane,
+    const MprCursorPositionWorld& position) const
+{
+    return m_sceneAdapter->normalizedDisplayPositionForCursorWorld(
+        plane,
+        position,
+        pane.renderWidget()->size());
+}
+
+bool VtkMprView::handleMeasurementEvent(QObject* watched, QEvent* event, MprSlicePlane plane)
+{
+    auto* widget = qobject_cast<QWidget*>(watched);
+    if (!widget)
+    {
+        return false;
+    }
+
+    ViewerInputEvent inputEvent;
+    inputEvent.plane = plane;
+    inputEvent.widgetSize = widget->size();
+
+    switch (event->type())
+    {
+    case QEvent::MouseMove:
+    {
+        const auto* mouseEvent = static_cast<QMouseEvent*>(event);
+        inputEvent.eventType = ViewerInputEvent::EventType::MouseMove;
+        inputEvent.phase = ViewerInputEvent::Phase::Update;
+        inputEvent.button = Qt::NoButton;
+        inputEvent.displayPosition = mouseEvent->position();
+        m_toolController.updateInteraction(inputEvent);
+        event->accept();
+        return true;
+    }
+    case QEvent::MouseButtonPress:
+    {
+        const auto* mouseEvent = static_cast<QMouseEvent*>(event);
+        inputEvent.eventType = ViewerInputEvent::EventType::MousePress;
+        inputEvent.phase = ViewerInputEvent::Phase::Begin;
+        inputEvent.button = mouseEvent->button();
+        inputEvent.displayPosition = mouseEvent->position();
+        m_toolController.beginInteraction(inputEvent);
+        event->accept();
+        return true;
+    }
+    case QEvent::MouseButtonRelease:
+    {
+        const auto* mouseEvent = static_cast<QMouseEvent*>(event);
+        inputEvent.eventType = ViewerInputEvent::EventType::MouseRelease;
+        inputEvent.phase = ViewerInputEvent::Phase::End;
+        inputEvent.button = mouseEvent->button();
+        inputEvent.displayPosition = mouseEvent->position();
+        m_toolController.endInteraction(inputEvent);
+        event->accept();
+        return true;
+    }
+    case QEvent::MouseButtonDblClick:
+    {
+        const auto* mouseEvent = static_cast<QMouseEvent*>(event);
+        inputEvent.eventType = ViewerInputEvent::EventType::MouseDoubleClick;
+        inputEvent.phase = ViewerInputEvent::Phase::Begin;
+        inputEvent.button = mouseEvent->button();
+        inputEvent.displayPosition = mouseEvent->position();
+        m_toolController.beginInteraction(inputEvent);
+        event->accept();
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
+MeasurementPoint VtkMprView::measurementPointForInput(const ViewerInputEvent& event) const
+{
+    QWidget* widget = nullptr;
+    switch (event.plane)
+    {
+    case MprSlicePlane::Axial:
+        widget = m_axialPane ? m_axialPane->renderWidget() : nullptr;
+        break;
+    case MprSlicePlane::Coronal:
+        widget = m_coronalPane ? m_coronalPane->renderWidget() : nullptr;
+        break;
+    case MprSlicePlane::Sagittal:
+        widget = m_sagittalPane ? m_sagittalPane->renderWidget() : nullptr;
+        break;
+    }
+
+    if (!widget)
+    {
+        return {};
+    }
+
+    return measurementPointForEvent(event.plane, *widget, event.displayPosition);
+}
+
+void VtkMprView::onMeasurementToolUpdated()
+{
+    refreshMeasurementOverlays();
+}
+
+bool VtkMprView::handlePanEvent(QObject* watched, QEvent* event, MprSlicePlane plane)
+{
+    auto* widget = qobject_cast<QWidget*>(watched);
+    if (!widget)
+    {
+        return false;
+    }
+
+    switch (event->type())
+    {
+    case QEvent::MouseButtonPress:
+    {
+        auto* mouseEvent = static_cast<QMouseEvent*>(event);
+        if (mouseEvent->button() != Qt::LeftButton)
+        {
+            return false;
+        }
+        m_lastInteractionPosition = mouseEvent->position();
+        m_panDragActive = true;
+        updateCursorState();
+        m_toolController.beginInteraction(makePanViewerInputEvent(
+            ViewerInputEvent::Phase::Begin,
+            plane,
+            mouseEvent->button(),
+            mouseEvent->position(),
+            {},
+            widget->size()));
+        event->accept();
+        return true;
+    }
+    case QEvent::MouseMove:
+    {
+        auto* mouseEvent = static_cast<QMouseEvent*>(event);
+        if (!mouseEvent->buttons().testFlag(Qt::LeftButton))
+        {
+            return false;
+        }
+        const QPointF currentPosition = mouseEvent->position();
+        m_toolController.updateInteraction(makePanViewerInputEvent(
+            ViewerInputEvent::Phase::Update,
+            plane,
+            Qt::NoButton,
+            currentPosition,
+            currentPosition - m_lastInteractionPosition,
+            widget->size()));
+        m_lastInteractionPosition = currentPosition;
+        refreshOverlayState();
+        event->accept();
+        return true;
+    }
+    case QEvent::MouseButtonRelease:
+    {
+        auto* mouseEvent = static_cast<QMouseEvent*>(event);
+        if (mouseEvent->button() != Qt::LeftButton)
+        {
+            return false;
+        }
+        m_panDragActive = false;
+        updateCursorState();
+        m_toolController.endInteraction(makePanViewerInputEvent(
+            ViewerInputEvent::Phase::End,
+            plane,
+            mouseEvent->button(),
+            mouseEvent->position(),
+            {},
+            widget->size()));
+        event->accept();
+        return true;
+    }
+    default:
+        break;
+    }
+
+    return false;
+}
+
+void VtkMprView::updateCursorState()
+{
+    const bool isPanTool = m_scene.activeTool() == MprToolType::Pan;
+    const QCursor cursor = m_panDragActive ? QCursor(Qt::ClosedHandCursor) : QCursor(Qt::OpenHandCursor);
+    auto applyCursor = [&](QWidget* widget) {
+        if (!widget)
+        {
+            return;
+        }
+        if (isPanTool)
+        {
+            widget->setCursor(cursor);
+        }
+        else
+        {
+            widget->unsetCursor();
+        }
+    };
+
+    applyCursor(m_axialPane->renderWidget());
+    applyCursor(m_coronalPane->renderWidget());
+    applyCursor(m_sagittalPane->renderWidget());
+}
+
+MeasurementPoint VtkMprView::measurementPointForEvent(
+    MprSlicePlane plane,
+    QWidget& widget,
+    const QPointF& position) const
+{
+    const MprCursorPositionWorld worldPosition = m_sceneAdapter->worldPositionFromDisplayPosition(
+        plane,
+        position,
+        widget.size(),
+        m_scene.cursorPosition());
+    return {worldPosition.x, worldPosition.y, worldPosition.z};
+}
+
+QString VtkMprView::measurementLabel(
+    const MeasurementAnnotation& measurement,
+    MprSlicePlane plane) const
+{
+    switch (measurement.type)
+    {
+    case MeasurementType::Distance:
+    case MeasurementType::Polyline:
+        return MeasurementService::formattedLength(measurement.lengthMm);
+    case MeasurementType::Angle:
+        return MeasurementService::formattedAngle(MeasurementService::angleDegrees(measurement.points));
+    case MeasurementType::RectangleRoi:
+        return MeasurementAnalyticsService::rectangleRoiLabel(
+            measurement,
+            MprMeasurementScalarSource(m_volume.get(), *m_sceneAdapter, plane));
+    }
+
+    return {};
+}
+
+QVector<DisplayMeasurement> VtkMprView::displayMeasurementsForPane(
+    VtkSliceMprPaneView& pane,
+    MprSlicePlane plane) const
+{
+    QVector<DisplayMeasurement> displayMeasurements;
+    const auto appendMeasurement = [&](const MeasurementAnnotation& measurement, bool preview) {
+        DisplayMeasurement display;
+        display.type = measurement.type;
+        display.color = measurement.color;
+        display.label = measurementLabel(measurement, plane);
+        display.preview = preview;
+        const auto appendWorldPoint = [&](const MeasurementPoint& point) {
+            const QPointF normalizedPosition = m_sceneAdapter->normalizedDisplayPositionForCursorWorld(
+                plane,
+                {point.x, point.y, point.z},
+                pane.renderWidget()->size());
+            display.points.append({
+                normalizedPosition.x() * pane.renderWidget()->width(),
+                normalizedPosition.y() * pane.renderWidget()->height()});
+        };
+
+        if (measurement.type == MeasurementType::RectangleRoi && measurement.points.size() >= 2)
+        {
+            const MeasurementPoint& first = measurement.points[0];
+            const MeasurementPoint& second = measurement.points[1];
+            MeasurementPoint topRight = first;
+            MeasurementPoint bottomLeft = second;
+            switch (plane)
+            {
+            case MprSlicePlane::Axial:
+                topRight.x = second.x;
+                topRight.y = first.y;
+                topRight.z = first.z;
+                bottomLeft.x = first.x;
+                bottomLeft.y = second.y;
+                bottomLeft.z = first.z;
+                break;
+            case MprSlicePlane::Coronal:
+                topRight.x = second.x;
+                topRight.y = first.y;
+                topRight.z = first.z;
+                bottomLeft.x = first.x;
+                bottomLeft.y = first.y;
+                bottomLeft.z = second.z;
+                break;
+            case MprSlicePlane::Sagittal:
+                topRight.x = first.x;
+                topRight.y = second.y;
+                topRight.z = first.z;
+                bottomLeft.x = first.x;
+                bottomLeft.y = first.y;
+                bottomLeft.z = second.z;
+                break;
+            }
+
+            appendWorldPoint(first);
+            appendWorldPoint(topRight);
+            appendWorldPoint(second);
+            appendWorldPoint(bottomLeft);
+            display.closedShape = true;
+            display.filled = true;
+            if (display.points.size() >= 2)
+            {
+                display.labelAnchor = display.points[1] + QPointF(8.0, -8.0);
+            }
+        }
+        else
+        {
+            display.points.reserve(measurement.points.size());
+            for (const auto& point : measurement.points)
+            {
+                appendWorldPoint(point);
+            }
+            if (!display.points.isEmpty())
+            {
+                display.labelAnchor = display.points.last() + QPointF(8.0, -8.0);
+            }
+        }
+        displayMeasurements.append(display);
+    };
+
+    for (const auto& measurement : m_measurementService.measurements())
+    {
+        appendMeasurement(measurement, false);
+    }
+    if (const auto activeMeasurement = m_measurementService.activeMeasurement())
+    {
+        appendMeasurement(*activeMeasurement, true);
+    }
+    return displayMeasurements;
 }
 
 void VtkMprView::configureScene()
@@ -335,21 +695,13 @@ void VtkMprView::configureBindings()
         m_sagittalPane->sliceSlider()->setValue(m_sceneAdapter->currentSlice(MprSlicePlane::Sagittal));
 
         m_axialPane->setCrosshairPosition(
-            MprSynchronizationService::normalizedPositionForPlane(
-                *m_imageData,
-                position,
-                MprSlicePlane::Axial));
+            normalizedCrosshairPositionForPane(*m_axialPane, MprSlicePlane::Axial, position));
         m_coronalPane->setCrosshairPosition(
-            MprSynchronizationService::normalizedPositionForPlane(
-                *m_imageData,
-                position,
-                MprSlicePlane::Coronal));
+            normalizedCrosshairPositionForPane(*m_coronalPane, MprSlicePlane::Coronal, position));
         m_sagittalPane->setCrosshairPosition(
-            MprSynchronizationService::normalizedPositionForPlane(
-                *m_imageData,
-                position,
-                MprSlicePlane::Sagittal));
+            normalizedCrosshairPositionForPane(*m_sagittalPane, MprSlicePlane::Sagittal, position));
         updatePaneStatusText();
+        refreshMeasurementOverlays();
         m_sceneAdapter->renderAll();
     });
 

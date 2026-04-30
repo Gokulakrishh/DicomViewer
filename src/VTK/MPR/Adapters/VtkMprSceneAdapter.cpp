@@ -16,6 +16,42 @@
 #include <vtkRenderWindowInteractor.h>
 #include <vtkResliceImageViewer.h>
 
+namespace
+{
+double clampedNormalizedCoordinate(double value, int minExtent, int maxExtent)
+{
+    if (maxExtent <= minExtent)
+    {
+        return 0.5;
+    }
+
+    return std::clamp(
+        (value - static_cast<double>(minExtent)) /
+            static_cast<double>(maxExtent - minExtent),
+        0.0,
+        1.0);
+}
+
+double clampedIndexCoordinate(double value, int minExtent, int maxExtent)
+{
+    return std::clamp(
+        value,
+        static_cast<double>(minExtent),
+        static_cast<double>(maxExtent));
+}
+
+QSize rendererDisplaySize(vtkRenderer& renderer, const QSize& fallbackSize)
+{
+    const int* size = renderer.GetSize();
+    if (!size || size[0] <= 0 || size[1] <= 0)
+    {
+        return fallbackSize;
+    }
+
+    return {size[0], size[1]};
+}
+}
+
 VtkMprSceneAdapter::VtkMprSceneAdapter()
 {
     for (int index = 0; index < 3; ++index)
@@ -119,6 +155,271 @@ void VtkMprSceneAdapter::zoom(MprSlicePlane plane, const QPointF& normalizedDelt
     const double factor = std::exp(-normalizedDelta.y() * 2.0);
     camera->Zoom(factor);
     viewer->Render();
+}
+
+void VtkMprSceneAdapter::pan(MprSlicePlane plane, const QPointF& displayDelta, const QSize& widgetSize)
+{
+    auto* viewer = m_sliceViewers[planeIndex(plane)].GetPointer();
+    auto* renderer = viewer ? viewer->GetRenderer() : nullptr;
+    auto* camera = renderer ? renderer->GetActiveCamera() : nullptr;
+    if (!renderer || !camera || widgetSize.width() <= 0 || widgetSize.height() <= 0)
+    {
+        return;
+    }
+
+    const QSize displaySize = rendererDisplaySize(*renderer, widgetSize);
+
+    renderer->SetWorldPoint(
+        camera->GetFocalPoint()[0],
+        camera->GetFocalPoint()[1],
+        camera->GetFocalPoint()[2],
+        1.0);
+    renderer->WorldToDisplay();
+
+    double focalDisplay[3];
+    renderer->GetDisplayPoint(focalDisplay);
+
+    const double dx = displayDelta.x() * static_cast<double>(displaySize.width()) /
+        static_cast<double>(widgetSize.width());
+    const double dy = displayDelta.y() * static_cast<double>(displaySize.height()) /
+        static_cast<double>(widgetSize.height());
+
+    renderer->SetDisplayPoint(focalDisplay[0], focalDisplay[1], focalDisplay[2]);
+    renderer->DisplayToWorld();
+    double beforeWorld[4];
+    renderer->GetWorldPoint(beforeWorld);
+
+    renderer->SetDisplayPoint(focalDisplay[0] - dx, focalDisplay[1] + dy, focalDisplay[2]);
+    renderer->DisplayToWorld();
+    double afterWorld[4];
+    renderer->GetWorldPoint(afterWorld);
+
+    if (std::abs(beforeWorld[3]) <= 1e-12 || std::abs(afterWorld[3]) <= 1e-12)
+    {
+        return;
+    }
+
+    const double worldDelta[3] = {
+        afterWorld[0] / afterWorld[3] - beforeWorld[0] / beforeWorld[3],
+        afterWorld[1] / afterWorld[3] - beforeWorld[1] / beforeWorld[3],
+        afterWorld[2] / afterWorld[3] - beforeWorld[2] / beforeWorld[3]};
+
+    const double* focalPoint = camera->GetFocalPoint();
+    const double* position = camera->GetPosition();
+    camera->SetFocalPoint(
+        focalPoint[0] + worldDelta[0],
+        focalPoint[1] + worldDelta[1],
+        focalPoint[2] + worldDelta[2]);
+    camera->SetPosition(
+        position[0] + worldDelta[0],
+        position[1] + worldDelta[1],
+        position[2] + worldDelta[2]);
+    renderer->ResetCameraClippingRange();
+    viewer->Render();
+}
+
+QPointF VtkMprSceneAdapter::normalizedImagePositionFromDisplayPosition(
+    MprSlicePlane plane,
+    const QPointF& widgetPosition,
+    const QSize& widgetSize,
+    const MprCursorPositionWorld& currentCursorPosition) const
+{
+    if (!m_imageData)
+    {
+        return {0.5, 0.5};
+    }
+
+    double pickedIndex[3];
+    const MprCursorPositionWorld pickedPosition = worldPositionFromDisplayPosition(
+        plane,
+        widgetPosition,
+        widgetSize,
+        currentCursorPosition);
+    m_imageData->TransformPhysicalPointToContinuousIndex(
+        pickedPosition.x,
+        pickedPosition.y,
+        pickedPosition.z,
+        pickedIndex);
+
+    double currentIndex[3];
+    m_imageData->TransformPhysicalPointToContinuousIndex(
+        currentCursorPosition.x,
+        currentCursorPosition.y,
+        currentCursorPosition.z,
+        currentIndex);
+
+    int extent[6];
+    m_imageData->GetExtent(extent);
+
+    switch (plane)
+    {
+    case MprSlicePlane::Axial:
+        pickedIndex[2] = currentIndex[2];
+        break;
+    case MprSlicePlane::Coronal:
+        pickedIndex[1] = currentIndex[1];
+        break;
+    case MprSlicePlane::Sagittal:
+        pickedIndex[0] = currentIndex[0];
+        break;
+    }
+
+    pickedIndex[0] = clampedIndexCoordinate(pickedIndex[0], extent[0], extent[1]);
+    pickedIndex[1] = clampedIndexCoordinate(pickedIndex[1], extent[2], extent[3]);
+    pickedIndex[2] = clampedIndexCoordinate(pickedIndex[2], extent[4], extent[5]);
+
+    switch (plane)
+    {
+    case MprSlicePlane::Axial:
+        return {
+            clampedNormalizedCoordinate(pickedIndex[0], extent[0], extent[1]),
+            1.0 - clampedNormalizedCoordinate(pickedIndex[1], extent[2], extent[3])};
+    case MprSlicePlane::Coronal:
+        return {
+            clampedNormalizedCoordinate(pickedIndex[0], extent[0], extent[1]),
+            1.0 - clampedNormalizedCoordinate(pickedIndex[2], extent[4], extent[5])};
+    case MprSlicePlane::Sagittal:
+        return {
+            clampedNormalizedCoordinate(pickedIndex[1], extent[2], extent[3]),
+            1.0 - clampedNormalizedCoordinate(pickedIndex[2], extent[4], extent[5])};
+    }
+
+    return {0.5, 0.5};
+}
+
+MprCursorPositionWorld VtkMprSceneAdapter::worldPositionFromDisplayPosition(
+    MprSlicePlane plane,
+    const QPointF& widgetPosition,
+    const QSize& widgetSize,
+    const MprCursorPositionWorld& currentCursorPosition) const
+{
+    if (!m_imageData || widgetSize.width() <= 0 || widgetSize.height() <= 0)
+    {
+        return currentCursorPosition;
+    }
+
+    auto* viewer = m_sliceViewers[planeIndex(plane)].GetPointer();
+    auto* renderer = viewer ? viewer->GetRenderer() : nullptr;
+    if (!renderer)
+    {
+        return currentCursorPosition;
+    }
+    const QSize displaySize = rendererDisplaySize(*renderer, widgetSize);
+
+    renderer->SetWorldPoint(
+        currentCursorPosition.x,
+        currentCursorPosition.y,
+        currentCursorPosition.z,
+        1.0);
+    renderer->WorldToDisplay();
+
+    double cursorDisplay[3];
+    renderer->GetDisplayPoint(cursorDisplay);
+
+    renderer->SetDisplayPoint(
+        widgetPosition.x() * static_cast<double>(displaySize.width()) /
+            static_cast<double>(widgetSize.width()),
+        static_cast<double>(displaySize.height()) -
+            widgetPosition.y() * static_cast<double>(displaySize.height()) /
+                static_cast<double>(widgetSize.height()),
+        cursorDisplay[2]);
+    renderer->DisplayToWorld();
+
+    double worldPoint[4];
+    renderer->GetWorldPoint(worldPoint);
+    if (std::abs(worldPoint[3]) <= 1e-12)
+    {
+        return currentCursorPosition;
+    }
+
+    double pickedIndex[3];
+    m_imageData->TransformPhysicalPointToContinuousIndex(
+        worldPoint[0] / worldPoint[3],
+        worldPoint[1] / worldPoint[3],
+        worldPoint[2] / worldPoint[3],
+        pickedIndex);
+
+    double currentIndex[3];
+    m_imageData->TransformPhysicalPointToContinuousIndex(
+        currentCursorPosition.x,
+        currentCursorPosition.y,
+        currentCursorPosition.z,
+        currentIndex);
+
+    int extent[6];
+    m_imageData->GetExtent(extent);
+
+    switch (plane)
+    {
+    case MprSlicePlane::Axial:
+        pickedIndex[2] = currentIndex[2];
+        break;
+    case MprSlicePlane::Coronal:
+        pickedIndex[1] = currentIndex[1];
+        break;
+    case MprSlicePlane::Sagittal:
+        pickedIndex[0] = currentIndex[0];
+        break;
+    }
+
+    pickedIndex[0] = clampedIndexCoordinate(pickedIndex[0], extent[0], extent[1]);
+    pickedIndex[1] = clampedIndexCoordinate(pickedIndex[1], extent[2], extent[3]);
+    pickedIndex[2] = clampedIndexCoordinate(pickedIndex[2], extent[4], extent[5]);
+
+    double physicalPoint[3];
+    m_imageData->TransformContinuousIndexToPhysicalPoint(
+        pickedIndex[0],
+        pickedIndex[1],
+        pickedIndex[2],
+        physicalPoint);
+    return {physicalPoint[0], physicalPoint[1], physicalPoint[2]};
+}
+
+QPointF VtkMprSceneAdapter::normalizedDisplayPositionForCursorWorld(
+    MprSlicePlane plane,
+    const MprCursorPositionWorld& cursorPosition,
+    const QSize& widgetSize) const
+{
+    if (widgetSize.width() <= 0 || widgetSize.height() <= 0)
+    {
+        return {0.5, 0.5};
+    }
+
+    auto* viewer = m_sliceViewers[planeIndex(plane)].GetPointer();
+    auto* renderer = viewer ? viewer->GetRenderer() : nullptr;
+    if (!renderer)
+    {
+        return {0.5, 0.5};
+    }
+    const QSize displaySize = rendererDisplaySize(*renderer, widgetSize);
+
+    renderer->SetWorldPoint(cursorPosition.x, cursorPosition.y, cursorPosition.z, 1.0);
+    renderer->WorldToDisplay();
+
+    double displayPoint[3];
+    renderer->GetDisplayPoint(displayPoint);
+
+    return {
+        displayPoint[0] / static_cast<double>(displaySize.width()),
+        (static_cast<double>(displaySize.height()) - displayPoint[1]) /
+            static_cast<double>(displaySize.height())};
+}
+
+std::array<double, 3> VtkMprSceneAdapter::continuousIndexFromWorldPosition(
+    const MprCursorPositionWorld& worldPosition) const
+{
+    std::array<double, 3> continuousIndex{0.0, 0.0, 0.0};
+    if (!m_imageData)
+    {
+        return continuousIndex;
+    }
+
+    m_imageData->TransformPhysicalPointToContinuousIndex(
+        worldPosition.x,
+        worldPosition.y,
+        worldPosition.z,
+        continuousIndex.data());
+    return continuousIndex;
 }
 
 MprCursorPositionWorld VtkMprSceneAdapter::centeredCursorPositionWorld() const

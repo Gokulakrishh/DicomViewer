@@ -2,6 +2,7 @@
 
 #include "AdvancedViewer/WidgetsAdvancedViewerLauncher.h"
 #include "DicomViewerWindow/DicomMainWindow.h"
+#include "AppVersion.h"
 #include "Utilities/AppStyle.h"
 #include "Utilities/QSettingsAppConfigService.h"
 #include "Utilities/WarningDialogService.h"
@@ -19,7 +20,9 @@ int main(int argc, char* argv[])
 
     QApplication app(argc, argv);
 
-    app.setApplicationName("Dicom Image Viewer (2D/3D)");
+    app.setApplicationName(QString::fromUtf8(AppVersion::kProductName));
+    app.setApplicationDisplayName(QString::fromUtf8(AppVersion::kDisplayName));
+    app.setApplicationVersion(QString::fromUtf8(AppVersion::kVersionString));
     AppStyle::apply(app);
 
     DicomMainWindow dicom(

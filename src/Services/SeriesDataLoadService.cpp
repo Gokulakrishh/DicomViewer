@@ -1,5 +1,7 @@
 #include "Services/SeriesDataLoadService.h"
 
+#include "Audit/DicomMetadataAudit.h"
+#include "Audit/IAuditService.h"
 #include "Errors/AppError.h"
 #include "FileHandling/FileHandling.h"
 #include "Model/DicomImage.h"
@@ -17,8 +19,11 @@ AppError makeSeriesLoadError(ErrorCode code, const QString& technicalMessage, co
 }
 }
 
-SeriesDataLoadService::SeriesDataLoadService(const FileHandling& fileHandling)
-    : m_fileHandling(fileHandling)
+SeriesDataLoadService::SeriesDataLoadService(
+    const FileHandling& fileHandling,
+    IAuditService* auditService)
+    : m_fileHandling(fileHandling),
+      m_auditService(auditService)
 {
 }
 
@@ -67,6 +72,13 @@ AppResult<Series> SeriesDataLoadService::loadDiagnosticSeries(const Series& ligh
         diagnosticSeries.addImage(std::move(loadedImage));
     }
 
+    shareSeriesMetadataAcrossImages(diagnosticSeries);
+    if (m_auditService)
+    {
+        DicomMetadataAudit audit;
+        const DicomMetadataAuditResult auditResult = audit.evaluateSeries(diagnosticSeries);
+        m_auditService->record(audit.toAuditEvent(auditResult, diagnosticSeries.seriesInstanceUid()));
+    }
     return diagnosticSeries;
 }
 
@@ -105,4 +117,34 @@ void SeriesDataLoadService::copySeriesMetadata(const Series& source, Series& tar
     target.setPreviewPixmap(source.previewPixmap());
     target.setRepresentativeFilePath(source.representativeFilePath());
     target.setImageCount(source.imageCount());
+}
+
+void SeriesDataLoadService::shareSeriesMetadataAcrossImages(Series& series)
+{
+    std::shared_ptr<const DicomSeriesMetadata> sharedSeriesMetadata;
+    for (const auto& imagePtr : series.images())
+    {
+        if (imagePtr && imagePtr->metadata() && imagePtr->metadata()->series)
+        {
+            sharedSeriesMetadata = imagePtr->metadata()->series;
+            break;
+        }
+    }
+
+    if (!sharedSeriesMetadata)
+    {
+        return;
+    }
+
+    for (const auto& imagePtr : series.images())
+    {
+        if (!imagePtr || !imagePtr->metadata())
+        {
+            continue;
+        }
+
+        DicomInstanceMetadata metadata = *imagePtr->metadata();
+        metadata.series = sharedSeriesMetadata;
+        imagePtr->setMetadata(metadata);
+    }
 }

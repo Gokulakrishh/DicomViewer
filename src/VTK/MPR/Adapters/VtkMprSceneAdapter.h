@@ -2,7 +2,9 @@
 
 #include "VTK/MPR/MprTypes.h"
 
+#include <array>
 #include <QPointF>
+#include <QSize>
 #include <vtkSmartPointer.h>
 
 class QVTKOpenGLNativeWidget;
@@ -26,6 +28,23 @@ public:
     void applyCursorPositionWorld(const MprCursorPositionWorld& cursorPosition);
     void applyWindowLevelWidth(int level, int width);
     void zoom(MprSlicePlane plane, const QPointF& normalizedDelta);
+    void pan(MprSlicePlane plane, const QPointF& displayDelta, const QSize& widgetSize);
+    [[nodiscard]] MprCursorPositionWorld worldPositionFromDisplayPosition(
+        MprSlicePlane plane,
+        const QPointF& widgetPosition,
+        const QSize& widgetSize,
+        const MprCursorPositionWorld& currentCursorPosition) const;
+    [[nodiscard]] QPointF normalizedImagePositionFromDisplayPosition(
+        MprSlicePlane plane,
+        const QPointF& widgetPosition,
+        const QSize& widgetSize,
+        const MprCursorPositionWorld& currentCursorPosition) const;
+    [[nodiscard]] QPointF normalizedDisplayPositionForCursorWorld(
+        MprSlicePlane plane,
+        const MprCursorPositionWorld& cursorPosition,
+        const QSize& widgetSize) const;
+    [[nodiscard]] std::array<double, 3> continuousIndexFromWorldPosition(
+        const MprCursorPositionWorld& worldPosition) const;
     [[nodiscard]] MprCursorPositionWorld centeredCursorPositionWorld() const;
     [[nodiscard]] int sliceMin(MprSlicePlane plane) const;
     [[nodiscard]] int sliceMax(MprSlicePlane plane) const;

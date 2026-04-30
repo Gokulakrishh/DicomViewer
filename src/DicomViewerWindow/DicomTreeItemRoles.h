@@ -1,6 +1,6 @@
 #pragma once
 
-#include <Qt>
+#include <QtCore/Qt>
 
 namespace DicomTreeItemRoles
 {

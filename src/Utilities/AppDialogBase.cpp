@@ -1,5 +1,7 @@
 #include "Utilities/AppDialogBase.h"
 
+#include "AppVersion.h"
+
 #include <QFrame>
 #include <QLabel>
 #include <QVBoxLayout>
@@ -15,7 +17,7 @@ AppDialogBase::AppDialogBase(QWidget* parent)
     rootLayout->setContentsMargins(16, 16, 16, 16);
     rootLayout->setSpacing(12);
 
-    m_brandLabel = new QLabel("DicomViewer", this);
+    m_brandLabel = new QLabel(QString::fromUtf8(AppVersion::kDisplayName), this);
     m_brandLabel->setObjectName("appDialogBrandLabel");
 
     m_titleLabel = new QLabel(this);

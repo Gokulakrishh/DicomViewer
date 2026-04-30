@@ -230,9 +230,36 @@ void GDCMFileHandling::mergePatientHierarchy(const PatientPtr& sourcePatient, Pa
 
                 auto copiedImage = std::make_unique<DicomImage>();
                 copiedImage->setFilePath(sourceImage->filePath());
+                if (const auto sourceMetadata = sourceImage->metadata())
+                {
+                    auto copiedMetadata = std::make_shared<DicomInstanceMetadata>(*sourceMetadata);
+                    for (const auto& existingImage : targetSeries.images())
+                    {
+                        if (existingImage && existingImage->metadata() && existingImage->metadata()->series)
+                        {
+                            copiedMetadata->series = existingImage->metadata()->series;
+                            break;
+                        }
+                    }
+                    copiedImage->setMetadata(copiedMetadata);
+                }
                 copiedImage->setSopInstanceUid(sourceImage->sopInstanceUid());
                 copiedImage->setInstanceNumber(sourceImage->instanceNumber());
                 copiedImage->setDimensions(sourceImage->width(), sourceImage->height());
+                if (sourceImage->hasPixelSpacing())
+                {
+                    copiedImage->setPixelSpacing(sourceImage->pixelSpacingX(), sourceImage->pixelSpacingY());
+                }
+                if (sourceImage->hasImagePositionPatient())
+                {
+                    copiedImage->setImagePositionPatient(sourceImage->imagePositionPatient());
+                }
+                if (sourceImage->hasImageOrientationPatient())
+                {
+                    copiedImage->setImageOrientationPatient(sourceImage->imageOrientationPatient());
+                }
+                copiedImage->setSliceThickness(sourceImage->sliceThickness());
+                copiedImage->setSpacingBetweenSlices(sourceImage->spacingBetweenSlices());
                 targetSeries.addImage(std::move(copiedImage));
             }
         }
@@ -299,6 +326,76 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(
         const double parsedValue = firstComponent.toDouble(&isDouble);
         return isDouble ? parsedValue : fallbackValue;
     };
+    const auto readOptionalNumericTagValue = [this, &stringFilter](uint16_t group, uint16_t element) {
+        const QString tagValue = readStringTag(stringFilter, group, element);
+        if (tagValue.isEmpty())
+        {
+            return std::pair<bool, double>(false, 0.0);
+        }
+
+        const QString firstComponent = tagValue.split('\\').value(0).trimmed();
+        bool isDouble = false;
+        const double parsedValue = firstComponent.toDouble(&isDouble);
+        return std::pair<bool, double>(isDouble, isDouble ? parsedValue : 0.0);
+    };
+    const auto readNumericComponents = [this, &stringFilter](uint16_t group, uint16_t element) {
+        std::vector<double> values;
+        const QString tagValue = readStringTag(stringFilter, group, element);
+        const QStringList components = tagValue.split('\\', Qt::SkipEmptyParts);
+        values.reserve(static_cast<std::size_t>(components.size()));
+
+        for (const QString& component : components)
+        {
+            bool ok = false;
+            const double value = component.trimmed().toDouble(&ok);
+            if (ok)
+            {
+                values.push_back(value);
+            }
+        }
+
+        return values;
+    };
+    const auto readStringComponents = [this, &stringFilter](uint16_t group, uint16_t element) {
+        std::vector<QString> values;
+        const QString tagValue = readStringTag(stringFilter, group, element);
+        const QStringList components = tagValue.split('\\', Qt::SkipEmptyParts);
+        values.reserve(static_cast<std::size_t>(components.size()));
+
+        for (const QString& component : components)
+        {
+            const QString value = component.trimmed();
+            if (!value.isEmpty())
+            {
+                values.push_back(value);
+            }
+        }
+
+        return values;
+    };
+    const auto readWindowPresets = [&readNumericComponents, &readStringComponents]() {
+        std::vector<DicomWindowPreset> presets;
+        const std::vector<double> centers = readNumericComponents(0x0028, 0x1050);
+        const std::vector<double> widths = readNumericComponents(0x0028, 0x1051);
+        const std::vector<QString> explanations = readStringComponents(0x0028, 0x1055);
+        const std::size_t presetCount = std::min(centers.size(), widths.size());
+        presets.reserve(presetCount);
+
+        for (std::size_t index = 0; index < presetCount; ++index)
+        {
+            if (widths[index] <= 0.0)
+            {
+                continue;
+            }
+
+            presets.push_back({
+                centers[index],
+                widths[index],
+                index < explanations.size() ? explanations[index] : QString{}});
+        }
+
+        return presets;
+    };
     const auto readPixelSpacingValues = [this, &stringFilter]() {
         const QString tagValue = readStringTag(stringFilter, 0x0028, 0x0030);
         const QStringList components = tagValue.split('\\', Qt::SkipEmptyParts);
@@ -364,6 +461,10 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(
     int maximumStoredValue = 255;
     int defaultWindowLevel = 0;
     int defaultWindowWidth = 255;
+    const auto [hasRescaleSlope, rescaleSlope] = readOptionalNumericTagValue(0x0028, 0x1053);
+    const auto [hasRescaleIntercept, rescaleIntercept] = readOptionalNumericTagValue(0x0028, 0x1052);
+    const double appliedRescaleSlope = hasRescaleSlope ? rescaleSlope : 1.0;
+    const double appliedRescaleIntercept = hasRescaleIntercept ? rescaleIntercept : 0.0;
     if (samplesPerPixel == 3 && bitsAllocated <= 8)
     {
         image = QImage(
@@ -408,15 +509,12 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(
         minimumStoredValue = std::numeric_limits<int>::max();
         maximumStoredValue = std::numeric_limits<int>::min();
         rawPixels.resize(static_cast<std::size_t>(pixelCount));
-        const double rescaleSlope = readNumericTagValue(0x0028, 0x1053, 1.0);
-        const double rescaleIntercept = readNumericTagValue(0x0028, 0x1052, 0.0);
-
         if (isSignedPixelData)
         {
             const auto* pixelData = reinterpret_cast<const int16_t*>(buffer.constData());
             for (int index = 0; index < pixelCount; ++index)
             {
-                const int value = static_cast<int>(std::lround((static_cast<double>(pixelData[index]) * rescaleSlope) + rescaleIntercept));
+                const int value = static_cast<int>(std::lround((static_cast<double>(pixelData[index]) * appliedRescaleSlope) + appliedRescaleIntercept));
                 const int clampedValue = std::clamp(value, -32768, 32767);
                 rawPixels[static_cast<std::size_t>(index)] = static_cast<int16_t>(clampedValue);
                 minimumStoredValue = std::min(minimumStoredValue, clampedValue);
@@ -428,7 +526,7 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(
             const auto* pixelData = reinterpret_cast<const uint16_t*>(buffer.constData());
             for (int index = 0; index < pixelCount; ++index)
             {
-                const int value = static_cast<int>(std::lround((static_cast<double>(pixelData[index]) * rescaleSlope) + rescaleIntercept));
+                const int value = static_cast<int>(std::lround((static_cast<double>(pixelData[index]) * appliedRescaleSlope) + appliedRescaleIntercept));
                 const int clampedValue = std::clamp(value, -32768, 32767);
                 rawPixels[static_cast<std::size_t>(index)] = static_cast<int16_t>(clampedValue);
                 minimumStoredValue = std::min(minimumStoredValue, clampedValue);
@@ -458,22 +556,106 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(
     auto dicomImage = std::make_unique<DicomImage>();
     dicomImage->setFilePath(filePath);
     dicomImage->setDimensions(static_cast<int>(width), static_cast<int>(height));
-    dicomImage->setSopInstanceUid(readStringTag(stringFilter, 0x0008, 0x0018));
-    dicomImage->setInstanceNumber(readStringTag(stringFilter, 0x0020, 0x0013));
+    auto patientMetadata = std::make_shared<DicomPatientMetadata>();
+    patientMetadata->patientId = readStringTag(stringFilter, 0x0010, 0x0020);
+    patientMetadata->patientName = readStringTag(stringFilter, 0x0010, 0x0010);
+    patientMetadata->patientSex = readStringTag(stringFilter, 0x0010, 0x0040);
+    patientMetadata->patientBirthDate = normalizeDicomDate(readStringTag(stringFilter, 0x0010, 0x0030));
+
+    auto studyMetadata = std::make_shared<DicomStudyMetadata>();
+    studyMetadata->patient = patientMetadata;
+    studyMetadata->studyInstanceUid = readStringTag(stringFilter, 0x0020, 0x000D);
+    studyMetadata->patientPosition = readStringTag(stringFilter, 0x0018, 0x5100);
+    studyMetadata->studyDate = normalizeDicomDate(readStringTag(stringFilter, 0x0008, 0x0020));
+    studyMetadata->studyTime = readStringTag(stringFilter, 0x0008, 0x0030);
+    studyMetadata->studyDescription = readStringTag(stringFilter, 0x0008, 0x1030);
+    studyMetadata->referringPhysicianName = readStringTag(stringFilter, 0x0008, 0x0090);
+
+    auto seriesMetadata = std::make_shared<DicomSeriesMetadata>();
+    seriesMetadata->study = studyMetadata;
+    seriesMetadata->seriesInstanceUid = readStringTag(stringFilter, 0x0020, 0x000E);
+    seriesMetadata->frameOfReferenceUid = readStringTag(stringFilter, 0x0020, 0x0052);
+    seriesMetadata->seriesDate = normalizeDicomDate(readStringTag(stringFilter, 0x0008, 0x0021));
+    seriesMetadata->seriesTime = readStringTag(stringFilter, 0x0008, 0x0031);
+    seriesMetadata->seriesDescription = readStringTag(stringFilter, 0x0008, 0x103E);
+    seriesMetadata->seriesNumber = readStringTag(stringFilter, 0x0020, 0x0011);
+    seriesMetadata->modality = readStringTag(stringFilter, 0x0008, 0x0060);
+    seriesMetadata->bodyPartExamined = readStringTag(stringFilter, 0x0018, 0x0015);
+    seriesMetadata->protocolName = readStringTag(stringFilter, 0x0018, 0x1030);
+    seriesMetadata->manufacturer = readStringTag(stringFilter, 0x0008, 0x0070);
+    seriesMetadata->manufacturerModelName = readStringTag(stringFilter, 0x0008, 0x1090);
+    seriesMetadata->institutionName = readStringTag(stringFilter, 0x0008, 0x0080);
+    seriesMetadata->stationName = readStringTag(stringFilter, 0x0008, 0x1010);
+
+    auto metadata = std::make_shared<DicomInstanceMetadata>();
+    metadata->series = seriesMetadata;
+    metadata->sopClassUid = readStringTag(stringFilter, 0x0008, 0x0016);
+    metadata->sopInstanceUid = readStringTag(stringFilter, 0x0008, 0x0018);
+    metadata->instanceNumber = readStringTag(stringFilter, 0x0020, 0x0013);
+    metadata->imageType = readStringTag(stringFilter, 0x0008, 0x0008);
+    metadata->acquisitionDate = normalizeDicomDate(readStringTag(stringFilter, 0x0008, 0x0022));
+    metadata->acquisitionTime = readStringTag(stringFilter, 0x0008, 0x0032);
+    metadata->contentDate = normalizeDicomDate(readStringTag(stringFilter, 0x0008, 0x0023));
+    metadata->contentTime = readStringTag(stringFilter, 0x0008, 0x0033);
+    metadata->rows = static_cast<int>(height);
+    metadata->columns = static_cast<int>(width);
+    metadata->samplesPerPixel = static_cast<int>(samplesPerPixel);
+    metadata->bitsAllocated = static_cast<int>(bitsAllocated);
+    metadata->bitsStored = static_cast<int>(gdcmImage.GetPixelFormat().GetBitsStored());
+    metadata->highBit = static_cast<int>(gdcmImage.GetPixelFormat().GetHighBit());
+    metadata->pixelRepresentation = isSignedPixelData ? 1 : 0;
+    metadata->photometricInterpretation = readStringTag(stringFilter, 0x0028, 0x0004);
+    metadata->rescaleType = readStringTag(stringFilter, 0x0028, 0x1054);
+    metadata->voiLutFunction = readStringTag(stringFilter, 0x0028, 0x1056);
+    metadata->hasRescaleSlope = hasRescaleSlope;
+    metadata->rescaleSlope = appliedRescaleSlope;
+    metadata->hasRescaleIntercept = hasRescaleIntercept;
+    metadata->rescaleIntercept = appliedRescaleIntercept;
+    metadata->windowPresets = readWindowPresets();
+
     const auto [pixelSpacingX, pixelSpacingY] = readPixelSpacingValues();
-    dicomImage->setPixelSpacing(pixelSpacingX, pixelSpacingY);
+    metadata->pixelSpacingX = pixelSpacingX;
+    metadata->pixelSpacingY = pixelSpacingY;
+    metadata->hasPixelSpacing = pixelSpacingX > 0.0 && pixelSpacingY > 0.0;
     const auto [hasImagePositionPatient, imagePositionPatient] = readVector3Tag(0x0020, 0x0032);
     if (hasImagePositionPatient)
     {
-        dicomImage->setImagePositionPatient(imagePositionPatient);
+        metadata->hasImagePositionPatient = true;
+        metadata->imagePositionPatient = imagePositionPatient;
     }
     const auto [hasImageOrientationPatient, imageOrientationPatient] = readVector6Tag(0x0020, 0x0037);
     if (hasImageOrientationPatient)
     {
+        metadata->hasImageOrientationPatient = true;
+        metadata->imageOrientationPatient = imageOrientationPatient;
+    }
+    const auto [hasSliceThickness, sliceThickness] = readOptionalNumericTagValue(0x0018, 0x0050);
+    metadata->hasSliceThickness = hasSliceThickness && sliceThickness > 0.0;
+    metadata->sliceThickness = metadata->hasSliceThickness ? sliceThickness : 0.0;
+    const auto [hasSpacingBetweenSlices, spacingBetweenSlices] = readOptionalNumericTagValue(0x0018, 0x0088);
+    metadata->hasSpacingBetweenSlices = hasSpacingBetweenSlices && spacingBetweenSlices > 0.0;
+    metadata->spacingBetweenSlices = metadata->hasSpacingBetweenSlices ? spacingBetweenSlices : 0.0;
+    const auto [hasSliceLocation, sliceLocation] = readOptionalNumericTagValue(0x0020, 0x1041);
+    metadata->hasSliceLocation = hasSliceLocation;
+    metadata->sliceLocation = sliceLocation;
+    const auto [hasGantryDetectorTilt, gantryDetectorTilt] = readOptionalNumericTagValue(0x0018, 0x1120);
+    metadata->hasGantryDetectorTilt = hasGantryDetectorTilt;
+    metadata->gantryDetectorTilt = gantryDetectorTilt;
+
+    dicomImage->setMetadata(metadata);
+    dicomImage->setSopInstanceUid(metadata->sopInstanceUid);
+    dicomImage->setInstanceNumber(metadata->instanceNumber);
+    dicomImage->setPixelSpacing(pixelSpacingX, pixelSpacingY);
+    if (hasImagePositionPatient)
+    {
+        dicomImage->setImagePositionPatient(imagePositionPatient);
+    }
+    if (hasImageOrientationPatient)
+    {
         dicomImage->setImageOrientationPatient(imageOrientationPatient);
     }
-    dicomImage->setSliceThickness(readNumericTagValue(0x0018, 0x0050, 0.0));
-    dicomImage->setSpacingBetweenSlices(readNumericTagValue(0x0018, 0x0088, 0.0));
+    dicomImage->setSliceThickness(metadata->sliceThickness);
+    dicomImage->setSpacingBetweenSlices(metadata->spacingBetweenSlices);
 
     if (isMonochromeImage && !rawPixels.empty())
     {

@@ -1,10 +1,12 @@
 #pragma once
 
 #include "Services/ThreeDProfiles/ThreeDProfileSelection.h"
+#include "Model/DicomMetadata.h"
 
 #include <QString>
 #include <QWidget> 
 #include <memory>
+#include <vector>
 
 class IVolumeData;
 class QWidget;
@@ -19,6 +21,8 @@ public:
         const QString& title,
         int windowLevel,
         int windowWidth,
+        std::vector<DicomWindowPreset> dicomWindowPresets = {},
+        int activeDicomWindowPresetIndex = -1,
         QWidget* parent = nullptr) = 0;
 
     virtual QWidget* showThreeDVolume(

@@ -13,10 +13,18 @@ QWidget* WidgetsAdvancedViewerLauncher::showMprVolume(
     const QString& title,
     int windowLevel,
     int windowWidth,
+    std::vector<DicomWindowPreset> dicomWindowPresets,
+    int activeDicomWindowPresetIndex,
     QWidget* parent)
 {
 #if defined(DICOMVIEWER_ENABLE_VTK)
-    auto* viewer = new VtkMprViewerWindow(std::move(volume), windowLevel, windowWidth, parent);
+    auto* viewer = new VtkMprViewerWindow(
+        std::move(volume),
+        windowLevel,
+        windowWidth,
+        std::move(dicomWindowPresets),
+        activeDicomWindowPresetIndex,
+        parent);
     viewer->setAttribute(Qt::WA_DeleteOnClose);
     viewer->setWindowTitle(title);
     viewer->show();
@@ -28,6 +36,8 @@ QWidget* WidgetsAdvancedViewerLauncher::showMprVolume(
     Q_UNUSED(title);
     Q_UNUSED(windowLevel);
     Q_UNUSED(windowWidth);
+    Q_UNUSED(dicomWindowPresets);
+    Q_UNUSED(activeDicomWindowPresetIndex);
     Q_UNUSED(parent);
     return nullptr;
 #endif

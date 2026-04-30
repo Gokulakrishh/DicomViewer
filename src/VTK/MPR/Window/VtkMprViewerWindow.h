@@ -1,13 +1,17 @@
 #pragma once
 
 #include "VTK/MPR/MprTypes.h"
+#include "Model/DicomMetadata.h"
+#include "ViewerTools/ViewerToolPresentation.h"
 
 #include <QMainWindow>
 
 #include <memory>
+#include <vector>
 
 class QAction;
 class QComboBox;
+class QMenu;
 class IVolumeData;
 class VtkMprView;
 
@@ -20,6 +24,8 @@ public:
         std::shared_ptr<IVolumeData> volume,
         int initialWindowLevel,
         int initialWindowWidth,
+        std::vector<DicomWindowPreset> dicomWindowPresets = {},
+        int activeDicomWindowPresetIndex = -1,
         QWidget* parent = nullptr);
     ~VtkMprViewerWindow() override;
 
@@ -28,13 +34,16 @@ protected:
 
 private:
     void applyWindowPreset(int index);
+    void applyToolSelection();
     void syncPresetSelection(int level, int width);
     void setupToolbar();
-    void setExclusiveToolAction(QAction* activeAction, MprToolType toolType);
+    int comboValueForBuiltInPresetIndex(int index) const;
+    int comboValueForDicomPresetIndex(int index) const;
 
 private:
     VtkMprView* m_view{nullptr};
     QComboBox* m_presetComboBox{nullptr};
-    QAction* m_windowLevelAction{nullptr};
-    QAction* m_zoomAction{nullptr};
+    std::unique_ptr<ViewerToolPresentation> m_toolPresentation;
+    std::vector<DicomWindowPreset> m_dicomWindowPresets;
+    int m_activeDicomWindowPresetIndex{-1};
 };

@@ -38,3 +38,6 @@ cmake-build-*/
 *.pdb
 *.so
 *.so.*
+
+# Private internal documentation
+internal-docs/

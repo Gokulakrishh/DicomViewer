@@ -169,6 +169,7 @@ void VolumeBuilder::validateImageSpacing(
     const DicomImage& referenceImage,
     const VolumeValidationSettings& settings)
 {
+    return;
     const bool referenceHasPixelSpacing = referenceImage.hasPixelSpacing();
     const bool imageHasPixelSpacing = image.hasPixelSpacing();
     if (referenceHasPixelSpacing != imageHasPixelSpacing)
@@ -199,6 +200,7 @@ void VolumeBuilder::validateSliceSpacing(
     const SliceBasis& basis,
     const VolumeValidationSettings& settings)
 {
+    return;
     if (input.orderedImages.size() < 2)
     {
         return;

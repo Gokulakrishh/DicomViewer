@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Model/MeasurementAnnotationRecord.h"
 #include "Model/DicomParameters.h"
 
 #include <QList>
@@ -29,6 +30,9 @@ public:
     virtual StudyPtr getStudy(const QString& studyInstanceUid) = 0;
     virtual SeriesPtr getSeries(const QString& seriesInstanceUid) = 0;
     virtual DicomImagePtr getImage(const QString& sopInstanceUid) = 0;
+    virtual bool upsertSliceMeasurementAnnotation(const SliceMeasurementAnnotationRecord& record) = 0;
+    virtual QList<SliceMeasurementAnnotationRecord> loadSliceMeasurementAnnotations(const QString& sopInstanceUid) = 0;
+    virtual bool markSliceMeasurementAnnotationDeleted(const QString& annotationId) = 0;
     virtual QPixmap getPreviewForPatient(const QString& patientId) = 0;
     virtual QPixmap getPreviewForStudy(const QString& studyInstanceUid) = 0;
     virtual QPixmap getPreviewForSeries(const QString& seriesInstanceUid) = 0;
