@@ -17,18 +17,35 @@ class vtkImageData;
 class vtkImageViewer2;
 class vtkInteractorStyleUser;
 
+/**
+ * @brief VTK scene adapter for the main diagnostic slice view.
+ *
+ * Responsibilities:
+ * - Own VTK image viewer/render-window objects.
+ * - Convert between display coordinates, image indices, and patient-space
+ *   measurement points.
+ * - Apply zoom and pan camera changes.
+ */
 class VtkSliceSceneAdapter
 {
 public:
+    /** @brief Creates an unattached scene adapter. */
     VtkSliceSceneAdapter();
     ~VtkSliceSceneAdapter();
 
+    /** @brief Attaches the adapter to a Qt VTK widget. */
     void attach(QVTKOpenGLNativeWidget& widget);
+    /** @brief Clears current image data. */
     void clear();
+    /** @brief Sets DICOM image data with WL/WW. */
     void setDicomImage(const DicomImage& image, int windowLevel, int windowWidth, bool resetCamera);
+    /** @brief Sets a generic QImage for display. */
     void setQImage(const QImage& image, bool resetCamera);
+    /** @brief Fits the current image to the view. */
     void fitToView();
+    /** @brief Applies zoom delta. */
     void applyZoomDelta(int delta);
+    /** @brief Applies display-space pan. */
     void pan(const QPointF& displayDelta, const QSize& widgetSize);
     [[nodiscard]] MeasurementPoint measurementPointFromDisplayPosition(
         const QPointF& widgetPosition,

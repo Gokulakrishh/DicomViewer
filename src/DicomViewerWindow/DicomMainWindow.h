@@ -20,6 +20,7 @@
 
 #include "AdvancedViewer/IAdvancedViewerLauncher.h"
 #include "AI/AiChatTypes.h"
+#include "AnnotationReportDock.h"
 #include "DicomTreeController.h"
 #include "DicomTreePanel.h"
 #include "DicomViewportController.h"
@@ -39,9 +40,26 @@ class Patient;
 class Series;
 class Study;
 class AdvancedSeriesVolumeService;
+class AnnotationReportService;
 class LoadingDialog;
 class WarningDialogService;
 
+/**
+ * @brief Main application window for local DICOM viewing workflows.
+ *
+ * Responsibilities:
+ * - Coordinate study browsing, slice display, WL/WW, viewer tools, annotations,
+ *   and advanced viewer launch.
+ * - Keep heavy DICOM pixel loading in service/controller layers instead of the
+ *   UI tree model.
+ * - Route annotation persistence and reporting through service abstractions.
+ *
+ * Assumptions:
+ * - The application is local-first and uses source DICOM files as canonical
+ *   image data.
+ * - Viewer features are being developed toward medical-device traceability, but
+ *   UI coordination code is not itself a regulatory control.
+ */
 class DicomMainWindow : public QMainWindow
 {
     Q_OBJECT
@@ -49,11 +67,19 @@ class DicomMainWindow : public QMainWindow
     Q_DISABLE_COPY_MOVE(DicomMainWindow)
 
 public:
+    /**
+     * @brief Creates the main DICOM viewer window.
+     * @param appConfigService Application configuration service.
+     * @param advancedViewerLauncher Launcher for MPR and 3D windows.
+     * @param warningDialogService Warning dialog presenter.
+     * @param parent Optional Qt parent.
+     */
     explicit DicomMainWindow(
         std::unique_ptr<IAppConfigService> appConfigService,
         std::unique_ptr<IAdvancedViewerLauncher> advancedViewerLauncher,
         std::unique_ptr<IWarningDialogService> warningDialogService,
         QWidget* parent = nullptr);
+
     ~DicomMainWindow();
 
 private:
@@ -68,16 +94,16 @@ private:
     };
 
     void setUiComponents();
-    void setupLeftPanel();
+    void setupStudyBrowserDock();
     void setupViewerSurface();
     void setupViewerToolbar();
     void setupLegacyViewerControls();
     void setupCoreServices();
     void setupAsyncInfrastructure();
+    void setupAnnotationReportDock();
     void initializeDatabaseAndTree();
     void setupMenuBar();
     void setupConnections();
-    void setupAiDock();
     void clearCurrentSeries();
     void updatePatientInfo(
         const QString& patientName,
@@ -86,6 +112,8 @@ private:
         const QString& modality,
         const QString& studyDate);
     void refreshHierarchyForGlobalSearch();
+    void refreshAnnotationReportDock();
+    [[nodiscard]] AnnotationCurrentSliceContext currentAnnotationSliceContext() const;
     void updateCineControls();
     void applyImageAdjustments();
     void displayImageInViewer(const DicomImage& image, int windowLevel, int windowWidth);
@@ -133,12 +161,31 @@ private slots:
     void onTreeSeriesSelectionRequested(const QString& seriesInstanceUid);
     void onTreeFileSelectionRequested(const QString& filePath);
     void onSliceAnnotationsChanged(const QList<SliceMeasurementAnnotationRecord>& records);
+    void onAnnotationReportFilterChanged();
+    void onAnnotationReportGoToSliceRequested(
+        const QString& seriesInstanceUid,
+        const QString& sopInstanceUid,
+        int frameIndex,
+        const QString& annotationId);
+    void onAnnotationReportMetadataChanged(
+        const QString& annotationId,
+        const QString& label,
+        const QString& bodyRegion,
+        const QString& seriesInstanceUid);
+    void onAnnotationReportDeleteRequested(
+        const QString& annotationId,
+        const QString& seriesInstanceUid,
+        const QString& sopInstanceUid,
+        int frameIndex);
 
 private:
     Ui::DicomMainWindow* m_ui{nullptr};
     VtkDiagnosticSliceView* m_view{nullptr};
+    QDockWidget* m_studyBrowserDock{nullptr};
     DicomTreePanel* m_treePanel{nullptr};
     DicomTreeController* m_treeController{nullptr};
+    QDockWidget* m_annotationReportDock{nullptr};
+    AnnotationReportDock* m_annotationReportPanel{nullptr};
     QDockWidget* m_aiDock{nullptr};
     QComboBox* m_aiModelComboBox{nullptr};
     QComboBox* m_aiReasoningComboBox{nullptr};
@@ -151,7 +198,6 @@ private:
     QAction* m_openFolderAction{nullptr};
     QAction* m_openMprAction{nullptr};
     QAction* m_openThreeDAction{nullptr};
-    QAction* m_aiPreferencesAction{nullptr};
     QAction* m_windowLevelToolAction{nullptr};
     QAction* m_zoomToolAction{nullptr};
     QAction* m_panToolAction{nullptr};
@@ -171,6 +217,7 @@ private:
     std::unique_ptr<DicomViewportController> m_viewportController;
     std::unique_ptr<DatabaseService> m_databaseService;
     std::unique_ptr<MeasurementAnnotationStore> m_measurementAnnotationStore;
+    std::unique_ptr<AnnotationReportService> m_annotationReportService;
     std::unique_ptr<IWarningDialogService> m_warningDialogService;
     QTimer* m_cineTimer{nullptr};
     QFutureWatcher<AiChatResponse>* m_aiResponseWatcher{nullptr};
@@ -184,6 +231,7 @@ private:
     QString m_currentModality;
     QString m_currentStudyDate;
     QString m_activeSliceSopInstanceUid;
+    int m_activeSliceFrameIndex{0};
     QSet<QString> m_loadedSliceAnnotationIds;
     bool m_aiHistoryShowingStatusMessage{false};
 };

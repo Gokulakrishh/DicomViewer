@@ -12,11 +12,32 @@
 class DicomImage;
 class Series;
 
+/**
+ * @brief Constructs scalar volume data from a loaded DICOM series.
+ *
+ * Responsibilities:
+ * - Validate slice dimensions, orientation, pixel spacing, and slice spacing.
+ * - Sort slices by patient-space geometry.
+ * - Build a contiguous voxel buffer for MPR and 3D workflows.
+ *
+ * Assumptions:
+ * - Input images already contain raw pixel data.
+ * - Geometry validation failures should block derived volume construction.
+ */
 class VolumeBuilder
 {
 public:
+    /**
+     * @brief Creates a volume builder.
+     * @param validationSettings Geometry validation tolerances.
+     */
     explicit VolumeBuilder(VolumeValidationSettings validationSettings = {});
 
+    /**
+     * @brief Builds a volume from a diagnostic DICOM series.
+     * @param diagnosticSeries Series with loaded raw pixels.
+     * @return Volume data or structured validation error.
+     */
     AppResult<std::shared_ptr<IVolumeData>> buildFromDiagnosticSeries(const Series& diagnosticSeries) const;
 
 private:

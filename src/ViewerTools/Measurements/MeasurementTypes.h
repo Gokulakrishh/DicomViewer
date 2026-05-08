@@ -5,6 +5,9 @@
 #include <QString>
 #include <QVector>
 
+/**
+ * @brief Supported annotation/measurement geometry types.
+ */
 enum class MeasurementType
 {
     Distance,
@@ -13,6 +16,9 @@ enum class MeasurementType
     RectangleRoi
 };
 
+/**
+ * @brief Measurement point in patient/world coordinates.
+ */
 struct MeasurementPoint
 {
     double x{0.0};
@@ -20,6 +26,13 @@ struct MeasurementPoint
     double z{0.0};
 };
 
+/**
+ * @brief In-memory measurement annotation geometry and derived length.
+ *
+ * Assumptions:
+ * - Persistence metadata such as body region is stored in
+ *   SliceMeasurementAnnotationRecord.
+ */
 struct MeasurementAnnotation
 {
     QString id;
@@ -29,6 +42,9 @@ struct MeasurementAnnotation
     double lengthMm{0.0};
 };
 
+/**
+ * @brief Derived statistics for a rectangular ROI.
+ */
 struct RoiStatistics
 {
     bool valid{false};
@@ -40,6 +56,9 @@ struct RoiStatistics
     double areaMm2{0.0};
 };
 
+/**
+ * @brief Display-space measurement prepared for overlay rendering.
+ */
 struct DisplayMeasurement
 {
     MeasurementType type{MeasurementType::Distance};

@@ -10,17 +10,41 @@
 #include <memory>
 #include <vector>
 
+/**
+ * @brief Parameters for marching-cubes mesh extraction.
+ */
 struct MarchingCubesParameters
 {
     double isoValue{0.5};
 };
 
+/**
+ * @brief Marching-cubes mesh extraction strategy for segmentation masks.
+ *
+ * Responsibilities:
+ * - Convert foreground masks into triangle meshes in physical volume space.
+ * - Keep mesh extraction separate from segmentation and rendering.
+ */
 class MarchingCubesMeshExtractionStrategy final : public IMeshExtractionStrategy
 {
 public:
+    /**
+     * @brief Creates the extraction strategy.
+     * @param parameters Iso-value and extraction settings.
+     */
     explicit MarchingCubesMeshExtractionStrategy(MarchingCubesParameters parameters = {});
 
+    /**
+     * @brief Extracts a mesh from a segmentation mask.
+     * @param mask Source mask.
+     * @return Extracted mesh.
+     */
     [[nodiscard]] std::shared_ptr<IMeshData> extract(const ISegmentationMask& mask) const override;
+
+    /**
+     * @brief Returns extraction parameters.
+     * @return Current parameters.
+     */
     [[nodiscard]] const MarchingCubesParameters& parameters() const;
 
 private:

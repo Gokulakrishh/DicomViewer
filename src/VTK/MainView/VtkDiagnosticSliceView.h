@@ -21,20 +21,36 @@ class QToolButton;
 class QVTKOpenGLNativeWidget;
 class VtkSliceSceneAdapter;
 
+/**
+ * @brief Main diagnostic slice viewing widget.
+ *
+ * Responsibilities:
+ * - Display one DICOM slice with WL/WW, zoom, pan, cine, and overlays.
+ * - Host reusable viewer tools and measurement tools.
+ * - Convert viewer measurements into slice annotation records for persistence.
+ */
 class VtkDiagnosticSliceView : public QWidget, public IViewerToolTarget, public IMeasurementToolHost
 {
     Q_OBJECT
 
 public:
+    /** @brief Creates the diagnostic slice view. */
     explicit VtkDiagnosticSliceView(QWidget* parent = nullptr);
     ~VtkDiagnosticSliceView() override;
 
+    /** @brief Sets a renderable medical image. */
     void setImage(std::shared_ptr<MedicalImage> image, bool resetCamera = true);
+    /** @brief Sets a DICOM image rendered with WL/WW. */
     void setDicomImage(const DicomImage& image, int windowLevel, int windowWidth, bool resetCamera = true);
+    /** @brief Clears the displayed image and overlays. */
     void clearImage();
+    /** @brief Sets slice navigation state. */
     void setSliceNavigationState(int currentIndex, int totalCount);
+    /** @brief Enables/disables cine controls. */
     void setCineAvailable(bool available);
+    /** @brief Updates cine playback UI state. */
     void setCinePlaying(bool playing);
+    /** @brief Deprecated no-op; DICOM details are shown in the annotation dock instead of over the image. */
     void setPatientInfoText(
         const QString& patientName,
         const QString& age,
@@ -51,7 +67,7 @@ public:
     void setAngleMeasurementEnabled(bool enabled);
     void setRectangleRoiMeasurementEnabled(bool enabled);
     void clearMeasurements();
-    void setSliceAnnotationContext(const QString& seriesInstanceUid, const QString& sopInstanceUid);
+    void setSliceAnnotationContext(const QString& seriesInstanceUid, const QString& sopInstanceUid, int frameIndex = 0);
     void loadSliceAnnotations(const QList<SliceMeasurementAnnotationRecord>& records);
     void applyZoomDelta(int delta);
     QByteArray captureSnapshotPng() const;
@@ -104,7 +120,6 @@ private:
     QToolButton* m_cinePlayButton{nullptr};
     QSlider* m_sliceSlider{nullptr};
     QLabel* m_sliceLabel{nullptr};
-    QLabel* m_patientInfoLabel{nullptr};
     QLabel* m_sliceInfoLabel{nullptr};
     QLabel* m_windowLevelLabel{nullptr};
     QLabel* m_zoomLabel{nullptr};
@@ -126,6 +141,7 @@ private:
     const DicomImage* m_currentDicomImage{nullptr};
     QString m_currentSeriesInstanceUid;
     QString m_currentSopInstanceUid;
+    int m_currentFrameIndex{0};
     MeasurementService m_measurementService;
     QVector<MeasurementAnnotation> m_lastPersistedMeasurements;
     bool m_suppressSliceAnnotationSignal{false};

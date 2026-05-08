@@ -1,5 +1,11 @@
 #pragma once
 
+/**
+ * @brief Stable application error codes for diagnostics and traceability.
+ *
+ * Numeric ranges group related subsystems so logs, tests, and future QMS records
+ * can reference failures consistently across releases.
+ */
 enum class ErrorCode : int
 {
     Unknown = 1000,

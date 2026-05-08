@@ -1,20 +1,39 @@
-#include "Database/PostgreService.h"
+#include "Database/SqliteService.h"
 
-#include "Database/PostgreConnection.h"
+#include "Database/SqliteConnection.h"
 
 #include <QBuffer>
+#include <QDateTime>
 #include <QDebug>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QPixmap>
+#include <QSet>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
+#include <QStringList>
 #include <QVariant>
+
+#include <algorithm>
 
 namespace
 {
+constexpr auto kSliceOrderClause =
+    "CASE WHEN instance_number IS NOT NULL "
+    "AND instance_number GLOB '[0-9]*' "
+    "AND instance_number NOT GLOB '*[^0-9]*' "
+    "THEN 0 ELSE 1 END, "
+    "CASE WHEN instance_number IS NOT NULL "
+    "AND instance_number GLOB '[0-9]*' "
+    "AND instance_number NOT GLOB '*[^0-9]*' "
+    "THEN CAST(instance_number AS INTEGER) END, "
+    "instance_number, sop_instance_uid";
+
+constexpr auto kFrameCountSumExpression =
+    "COALESCE(SUM(CASE WHEN frame_count IS NOT NULL AND frame_count > 0 THEN frame_count ELSE 1 END), 0)";
+
 QString measurementTypeToString(MeasurementType type)
 {
     switch (type)
@@ -32,6 +51,23 @@ QString measurementTypeToString(MeasurementType type)
     return "distance";
 }
 
+QString measurementTypeDisplayName(MeasurementType type)
+{
+    switch (type)
+    {
+    case MeasurementType::Distance:
+        return "Distance";
+    case MeasurementType::Polyline:
+        return "Polyline";
+    case MeasurementType::Angle:
+        return "Angle";
+    case MeasurementType::RectangleRoi:
+        return "ROI";
+    }
+
+    return "Measurement";
+}
+
 MeasurementType measurementTypeFromString(const QString& value)
 {
     if (value == "polyline")
@@ -47,6 +83,52 @@ MeasurementType measurementTypeFromString(const QString& value)
         return MeasurementType::RectangleRoi;
     }
     return MeasurementType::Distance;
+}
+
+QString normalizedBodyRegion(const QString& value)
+{
+    const QString normalizedValue = value.trimmed();
+    return normalizedValue.isEmpty() ? QString("Other") : normalizedValue;
+}
+
+QString defaultAnnotationLabel(MeasurementType type)
+{
+    return QString("%1 annotation").arg(measurementTypeDisplayName(type));
+}
+
+QString reportDisplayValue(const QSqlQuery& query, MeasurementType type)
+{
+    switch (type)
+    {
+    case MeasurementType::Distance:
+    case MeasurementType::Polyline: {
+        const QVariant value = query.value("length_mm");
+        return value.isValid() && !value.isNull()
+            ? QString("%1 mm").arg(value.toDouble(), 0, 'f', 1)
+            : QString();
+    }
+    case MeasurementType::Angle: {
+        const QVariant value = query.value("angle_degrees");
+        return value.isValid() && !value.isNull()
+            ? QString("%1 deg").arg(value.toDouble(), 0, 'f', 1)
+            : QString();
+    }
+    case MeasurementType::RectangleRoi: {
+        const QVariant mean = query.value("mean_value");
+        const QVariant sampleCount = query.value("sample_count");
+        if (!mean.isValid() || mean.isNull())
+        {
+            return {};
+        }
+        if (sampleCount.isValid() && !sampleCount.isNull())
+        {
+            return QString("mean %1, n=%2").arg(mean.toDouble(), 0, 'f', 1).arg(sampleCount.toInt());
+        }
+        return QString("mean %1").arg(mean.toDouble(), 0, 'f', 1);
+    }
+    }
+
+    return {};
 }
 
 QString pointsToJson(const QVector<MeasurementPoint>& points)
@@ -113,36 +195,53 @@ std::optional<double> optionalDoubleFromQuery(const QSqlQuery& query, const char
 
     return value.toDouble();
 }
+
+QString dateTimeToDatabase(const QDateTime& value)
+{
+    const QDateTime normalizedValue = value.isValid() ? value.toUTC() : QDateTime::currentDateTimeUtc();
+    return normalizedValue.toString(Qt::ISODateWithMs);
 }
 
-PostgreService::PostgreService(const DatabaseSettings& databaseSettings)
-    : m_connection(std::make_unique<PostgreConnection>(databaseSettings))
+QDateTime dateTimeFromQuery(const QSqlQuery& query, const char* fieldName)
+{
+    const QDateTime value = QDateTime::fromString(query.value(fieldName).toString(), Qt::ISODateWithMs);
+    return value.isValid() ? value.toUTC() : QDateTime();
+}
+
+QString countText(int count, const QString& singular, const QString& plural)
+{
+    return QString("%1 %2").arg(count).arg(count == 1 ? singular : plural);
+}
+}
+
+SqliteService::SqliteService(const DatabaseSettings& databaseSettings)
+    : m_connection(std::make_unique<SqliteConnection>(databaseSettings))
 {
 }
 
-PostgreService::PostgreService(std::unique_ptr<PostgreConnection> connection)
+SqliteService::SqliteService(std::unique_ptr<SqliteConnection> connection)
     : m_connection(std::move(connection))
 {
 }
 
-PostgreService::~PostgreService() = default;
+SqliteService::~SqliteService() = default;
 
-bool PostgreService::initialize()
+bool SqliteService::initialize()
 {
     return ensureConnection() && createTables();
 }
 
-QString PostgreService::lastErrorText() const
+QString SqliteService::lastErrorText() const
 {
     if (!m_connection)
     {
-        return "PostgreSQL connection is not available.";
+        return "SQLite connection is not available.";
     }
 
     return m_connection->lastErrorText();
 }
 
-bool PostgreService::savePatient(const PatientPtr& patient)
+bool SqliteService::savePatient(const PatientPtr& patient)
 {
     if (!patient || !ensureConnection())
     {
@@ -152,7 +251,7 @@ bool PostgreService::savePatient(const PatientPtr& patient)
     QSqlDatabase database = m_connection->database();
     if (!database.transaction())
     {
-        qWarning() << "Failed to start PostgreSQL transaction:" << database.lastError().text();
+        qWarning() << "Failed to start SQLite transaction:" << database.lastError().text();
         return false;
     }
 
@@ -188,7 +287,7 @@ bool PostgreService::savePatient(const PatientPtr& patient)
     return database.commit();
 }
 
-DatabaseService::PatientPtr PostgreService::getPatient(const QString& patientId)
+DatabaseService::PatientPtr SqliteService::getPatient(const QString& patientId)
 {
     if (patientId.isEmpty() || !ensureConnection())
     {
@@ -215,7 +314,7 @@ DatabaseService::PatientPtr PostgreService::getPatient(const QString& patientId)
     return patient;
 }
 
-QList<DatabaseService::PatientPtr> PostgreService::getAllPatients(const QString& filterText)
+QList<DatabaseService::PatientPtr> SqliteService::getAllPatients(const QString& filterText)
 {
     QList<PatientPtr> patients;
     if (!ensureConnection())
@@ -269,7 +368,7 @@ QList<DatabaseService::PatientPtr> PostgreService::getAllPatients(const QString&
     return patients;
 }
 
-QList<DatabaseService::StudyPtr> PostgreService::getStudiesForPatient(const QString& patientId, const QString& filterText)
+QList<DatabaseService::StudyPtr> SqliteService::getStudiesForPatient(const QString& patientId, const QString& filterText)
 {
     QList<StudyPtr> studies;
     if (patientId.isEmpty() || !ensureConnection())
@@ -326,7 +425,7 @@ QList<DatabaseService::StudyPtr> PostgreService::getStudiesForPatient(const QStr
     return studies;
 }
 
-QList<DatabaseService::SeriesPtr> PostgreService::getSeriesForStudy(const QString& studyInstanceUid, const QString& filterText)
+QList<DatabaseService::SeriesPtr> SqliteService::getSeriesForStudy(const QString& studyInstanceUid, const QString& filterText)
 {
     QList<SeriesPtr> seriesList;
     if (studyInstanceUid.isEmpty() || !ensureConnection())
@@ -338,12 +437,10 @@ QList<DatabaseService::SeriesPtr> PostgreService::getSeriesForStudy(const QStrin
     const QString normalizedFilter = filterText.trimmed().toLower();
     QString queryText =
         "SELECT s.series_instance_uid, s.series_description, s.modality, s.series_number, "
-        "(SELECT COUNT(*) FROM dicom_slice_metadata di WHERE di.series_instance_uid = s.series_instance_uid) AS image_count, "
+        "(SELECT " + QString::fromUtf8(kFrameCountSumExpression) + " FROM dicom_slice_metadata di WHERE di.series_instance_uid = s.series_instance_uid) AS image_count, "
         "(SELECT file_path FROM dicom_slice_metadata di "
         " WHERE di.series_instance_uid = s.series_instance_uid "
-        " ORDER BY "
-        " CASE WHEN instance_number ~ '^[0-9]+$' THEN instance_number::INTEGER END NULLS LAST, "
-        " instance_number, sop_instance_uid "
+        " ORDER BY " + QString::fromUtf8(kSliceOrderClause) + " "
         " LIMIT 1) AS representative_file_path "
         "FROM series s WHERE study_instance_uid = :study_instance_uid ";
     if (!normalizedFilter.isEmpty())
@@ -382,7 +479,7 @@ QList<DatabaseService::SeriesPtr> PostgreService::getSeriesForStudy(const QStrin
     return seriesList;
 }
 
-DatabaseService::StudyPtr PostgreService::getStudy(const QString& studyInstanceUid)
+DatabaseService::StudyPtr SqliteService::getStudy(const QString& studyInstanceUid)
 {
     if (studyInstanceUid.isEmpty() || !ensureConnection())
     {
@@ -409,7 +506,7 @@ DatabaseService::StudyPtr PostgreService::getStudy(const QString& studyInstanceU
     return study;
 }
 
-DatabaseService::SeriesPtr PostgreService::getSeries(const QString& seriesInstanceUid)
+DatabaseService::SeriesPtr SqliteService::getSeries(const QString& seriesInstanceUid)
 {
     if (seriesInstanceUid.isEmpty() || !ensureConnection())
     {
@@ -419,12 +516,10 @@ DatabaseService::SeriesPtr PostgreService::getSeries(const QString& seriesInstan
     QSqlQuery query(m_connection->database());
     query.prepare(
         "SELECT s.series_instance_uid, s.series_description, s.modality, s.series_number, s.preview_png, "
-        "(SELECT COUNT(*) FROM dicom_slice_metadata di WHERE di.series_instance_uid = s.series_instance_uid) AS image_count, "
+        "(SELECT " + QString::fromUtf8(kFrameCountSumExpression) + " FROM dicom_slice_metadata di WHERE di.series_instance_uid = s.series_instance_uid) AS image_count, "
         "(SELECT file_path FROM dicom_slice_metadata di "
         " WHERE di.series_instance_uid = s.series_instance_uid "
-        " ORDER BY "
-        " CASE WHEN instance_number ~ '^[0-9]+$' THEN instance_number::INTEGER END NULLS LAST, "
-        " instance_number, sop_instance_uid "
+        " ORDER BY " + QString::fromUtf8(kSliceOrderClause) + " "
         " LIMIT 1) AS representative_file_path "
         "FROM series s WHERE s.series_instance_uid = :series_instance_uid");
     query.bindValue(":series_instance_uid", seriesInstanceUid);
@@ -452,7 +547,7 @@ DatabaseService::SeriesPtr PostgreService::getSeries(const QString& seriesInstan
     return series;
 }
 
-DatabaseService::DicomImagePtr PostgreService::getImage(const QString& sopInstanceUid)
+DatabaseService::DicomImagePtr SqliteService::getImage(const QString& sopInstanceUid)
 {
     if (sopInstanceUid.isEmpty() || !ensureConnection())
     {
@@ -461,7 +556,7 @@ DatabaseService::DicomImagePtr PostgreService::getImage(const QString& sopInstan
 
     QSqlQuery query(m_connection->database());
     query.prepare(
-        "SELECT sop_instance_uid, file_path, instance_number, image_width, image_height "
+        "SELECT sop_instance_uid, file_path, instance_number, frame_count, frame_time_ms, cine_rate_fps, frame_interval_ms, image_width, image_height "
         "FROM dicom_slice_metadata WHERE sop_instance_uid = :sop_instance_uid");
     query.bindValue(":sop_instance_uid", sopInstanceUid);
 
@@ -473,7 +568,7 @@ DatabaseService::DicomImagePtr PostgreService::getImage(const QString& sopInstan
     return createImageFromQuery(query);
 }
 
-bool PostgreService::upsertSliceMeasurementAnnotation(const SliceMeasurementAnnotationRecord& record)
+bool SqliteService::upsertSliceMeasurementAnnotation(const SliceMeasurementAnnotationRecord& record)
 {
     if (record.seriesInstanceUid.isEmpty()
         || record.sopInstanceUid.isEmpty()
@@ -491,18 +586,24 @@ bool PostgreService::upsertSliceMeasurementAnnotation(const SliceMeasurementAnno
         : QDateTime::currentDateTimeUtc();
 
     QSqlQuery query(m_connection->database());
+    const QString measurementType = measurementTypeToString(record.measurement.type);
+    const QString label = record.label.trimmed().isEmpty()
+        ? defaultAnnotationLabel(record.measurement.type)
+        : record.label.trimmed();
+    const QString bodyRegion = normalizedBodyRegion(record.bodyRegion);
     query.prepare(
         "INSERT INTO measurement_annotations ("
-        "annotation_id, series_instance_uid, sop_instance_uid, measurement_type, points_json, color_hex, "
+        "annotation_id, series_instance_uid, sop_instance_uid, frame_index, measurement_type, points_json, color_hex, "
         "length_mm, angle_degrees, area_mm2, sample_count, mean_value, stddev_value, min_value, max_value, "
-        "created_at, updated_at, is_deleted) "
+        "label, body_region, note, created_at, updated_at, is_deleted) "
         "VALUES ("
-        ":annotation_id, :series_instance_uid, :sop_instance_uid, :measurement_type, :points_json, :color_hex, "
+        ":annotation_id, :series_instance_uid, :sop_instance_uid, :frame_index, :measurement_type, :points_json, :color_hex, "
         ":length_mm, :angle_degrees, :area_mm2, :sample_count, :mean_value, :stddev_value, :min_value, :max_value, "
-        ":created_at, :updated_at, :is_deleted) "
+        ":label, :body_region, :note, :created_at, :updated_at, :is_deleted) "
         "ON CONFLICT (annotation_id) DO UPDATE SET "
         "series_instance_uid = EXCLUDED.series_instance_uid, "
         "sop_instance_uid = EXCLUDED.sop_instance_uid, "
+        "frame_index = EXCLUDED.frame_index, "
         "measurement_type = EXCLUDED.measurement_type, "
         "points_json = EXCLUDED.points_json, "
         "color_hex = EXCLUDED.color_hex, "
@@ -514,12 +615,22 @@ bool PostgreService::upsertSliceMeasurementAnnotation(const SliceMeasurementAnno
         "stddev_value = EXCLUDED.stddev_value, "
         "min_value = EXCLUDED.min_value, "
         "max_value = EXCLUDED.max_value, "
+        "label = CASE "
+        "WHEN measurement_annotations.label IS NULL OR TRIM(measurement_annotations.label) = '' "
+        "THEN EXCLUDED.label ELSE measurement_annotations.label END, "
+        "body_region = CASE "
+        "WHEN EXCLUDED.body_region IS NULL OR TRIM(EXCLUDED.body_region) = '' OR EXCLUDED.body_region = 'Other' "
+        "THEN measurement_annotations.body_region ELSE EXCLUDED.body_region END, "
+        "note = CASE "
+        "WHEN EXCLUDED.note IS NULL OR TRIM(EXCLUDED.note) = '' "
+        "THEN measurement_annotations.note ELSE EXCLUDED.note END, "
         "updated_at = EXCLUDED.updated_at, "
         "is_deleted = EXCLUDED.is_deleted");
     query.bindValue(":annotation_id", record.measurement.id);
     query.bindValue(":series_instance_uid", record.seriesInstanceUid);
     query.bindValue(":sop_instance_uid", record.sopInstanceUid);
-    query.bindValue(":measurement_type", measurementTypeToString(record.measurement.type));
+    query.bindValue(":frame_index", std::max(0, record.frameIndex));
+    query.bindValue(":measurement_type", measurementType);
     query.bindValue(":points_json", pointsToJson(record.measurement.points));
     query.bindValue(":color_hex", record.measurement.color.name(QColor::HexRgb));
     query.bindValue(":length_mm", record.measurement.lengthMm);
@@ -546,8 +657,11 @@ bool PostgreService::upsertSliceMeasurementAnnotation(const SliceMeasurementAnno
     query.bindValue(
         ":max_value",
         record.roiStatistics ? QVariant(record.roiStatistics->maximum) : QVariant(QMetaType(QMetaType::Double)));
-    query.bindValue(":created_at", createdAtUtc);
-    query.bindValue(":updated_at", updatedAtUtc);
+    query.bindValue(":label", label);
+    query.bindValue(":body_region", bodyRegion);
+    query.bindValue(":note", record.note.trimmed());
+    query.bindValue(":created_at", dateTimeToDatabase(createdAtUtc));
+    query.bindValue(":updated_at", dateTimeToDatabase(updatedAtUtc));
     query.bindValue(":is_deleted", record.deleted);
 
     if (!query.exec())
@@ -559,7 +673,9 @@ bool PostgreService::upsertSliceMeasurementAnnotation(const SliceMeasurementAnno
     return true;
 }
 
-QList<SliceMeasurementAnnotationRecord> PostgreService::loadSliceMeasurementAnnotations(const QString& sopInstanceUid)
+QList<SliceMeasurementAnnotationRecord> SqliteService::loadSliceMeasurementAnnotations(
+    const QString& sopInstanceUid,
+    int frameIndex)
 {
     QList<SliceMeasurementAnnotationRecord> records;
     if (sopInstanceUid.isEmpty() || !ensureConnection())
@@ -569,13 +685,14 @@ QList<SliceMeasurementAnnotationRecord> PostgreService::loadSliceMeasurementAnno
 
     QSqlQuery query(m_connection->database());
     query.prepare(
-        "SELECT annotation_id, series_instance_uid, sop_instance_uid, measurement_type, points_json, color_hex, "
+        "SELECT annotation_id, series_instance_uid, sop_instance_uid, frame_index, measurement_type, points_json, color_hex, "
         "length_mm, angle_degrees, area_mm2, sample_count, mean_value, stddev_value, min_value, max_value, "
-        "created_at, updated_at, is_deleted "
+        "label, body_region, note, created_at, updated_at, is_deleted "
         "FROM measurement_annotations "
-        "WHERE sop_instance_uid = :sop_instance_uid AND is_deleted = FALSE "
+        "WHERE sop_instance_uid = :sop_instance_uid AND frame_index = :frame_index AND is_deleted = 0 "
         "ORDER BY created_at, annotation_id");
     query.bindValue(":sop_instance_uid", sopInstanceUid);
+    query.bindValue(":frame_index", std::max(0, frameIndex));
 
     if (!query.exec())
     {
@@ -588,14 +705,18 @@ QList<SliceMeasurementAnnotationRecord> PostgreService::loadSliceMeasurementAnno
         SliceMeasurementAnnotationRecord record;
         record.seriesInstanceUid = query.value("series_instance_uid").toString();
         record.sopInstanceUid = query.value("sop_instance_uid").toString();
+        record.frameIndex = query.value("frame_index").toInt();
+        record.label = query.value("label").toString();
+        record.bodyRegion = query.value("body_region").toString();
+        record.note = query.value("note").toString();
         record.measurement.id = query.value("annotation_id").toString();
         record.measurement.type = measurementTypeFromString(query.value("measurement_type").toString());
         record.measurement.points = pointsFromJson(query.value("points_json").toString());
         record.measurement.color = QColor(query.value("color_hex").toString());
         record.measurement.lengthMm = query.value("length_mm").toDouble();
         record.angleDegrees = optionalDoubleFromQuery(query, "angle_degrees");
-        record.createdAtUtc = query.value("created_at").toDateTime().toUTC();
-        record.updatedAtUtc = query.value("updated_at").toDateTime().toUTC();
+        record.createdAtUtc = dateTimeFromQuery(query, "created_at");
+        record.updatedAtUtc = dateTimeFromQuery(query, "updated_at");
         record.deleted = query.value("is_deleted").toBool();
 
         const QVariant sampleCountValue = query.value("sample_count");
@@ -618,7 +739,7 @@ QList<SliceMeasurementAnnotationRecord> PostgreService::loadSliceMeasurementAnno
     return records;
 }
 
-bool PostgreService::markSliceMeasurementAnnotationDeleted(const QString& annotationId)
+bool SqliteService::markSliceMeasurementAnnotationDeleted(const QString& annotationId)
 {
     if (annotationId.isEmpty() || !ensureConnection())
     {
@@ -628,9 +749,9 @@ bool PostgreService::markSliceMeasurementAnnotationDeleted(const QString& annota
     QSqlQuery query(m_connection->database());
     query.prepare(
         "UPDATE measurement_annotations "
-        "SET is_deleted = TRUE, updated_at = :updated_at "
+        "SET is_deleted = 1, updated_at = :updated_at "
         "WHERE annotation_id = :annotation_id");
-    query.bindValue(":updated_at", QDateTime::currentDateTimeUtc());
+    query.bindValue(":updated_at", dateTimeToDatabase(QDateTime::currentDateTimeUtc()));
     query.bindValue(":annotation_id", annotationId);
 
     if (!query.exec())
@@ -642,84 +763,354 @@ bool PostgreService::markSliceMeasurementAnnotationDeleted(const QString& annota
     return query.numRowsAffected() > 0;
 }
 
-QPixmap PostgreService::getPreviewForPatient(const QString& patientId)
+AnnotationReportSummaryBySeries SqliteService::loadSeriesAnnotationReportSummaries(
+    const QList<QString>& seriesInstanceUids)
 {
+    AnnotationReportSummaryBySeries summaries;
+    if (seriesInstanceUids.isEmpty() || !ensureConnection())
+    {
+        return summaries;
+    }
+
+    QList<QString> uniqueSeriesUids;
+    QSet<QString> seenSeriesUids;
+    uniqueSeriesUids.reserve(seriesInstanceUids.size());
+    for (const QString& seriesInstanceUid : seriesInstanceUids)
+    {
+        const QString normalizedUid = seriesInstanceUid.trimmed();
+        if (normalizedUid.isEmpty() || seenSeriesUids.contains(normalizedUid))
+        {
+            continue;
+        }
+
+        seenSeriesUids.insert(normalizedUid);
+        uniqueSeriesUids.append(normalizedUid);
+    }
+
+    if (uniqueSeriesUids.isEmpty())
+    {
+        return summaries;
+    }
+
+    QStringList placeholders;
+    placeholders.reserve(uniqueSeriesUids.size());
+    for (int index = 0; index < uniqueSeriesUids.size(); ++index)
+    {
+        placeholders.append(QString(":series_%1").arg(index));
+    }
+
+    QSqlQuery query(m_connection->database());
+    query.prepare(
+        QString(
+            "SELECT series_instance_uid, "
+            "COUNT(*) AS annotation_count, "
+            "COUNT(DISTINCT sop_instance_uid || '#' || frame_index) AS annotated_slice_count, "
+            "SUM(CASE WHEN measurement_type = 'distance' THEN 1 ELSE 0 END) AS distance_count, "
+            "SUM(CASE WHEN measurement_type = 'polyline' THEN 1 ELSE 0 END) AS polyline_count, "
+            "SUM(CASE WHEN measurement_type = 'angle' THEN 1 ELSE 0 END) AS angle_count, "
+            "SUM(CASE WHEN measurement_type = 'rectangle_roi' THEN 1 ELSE 0 END) AS rectangle_roi_count "
+            "FROM measurement_annotations "
+            "WHERE is_deleted = 0 AND series_instance_uid IN (%1) "
+            "GROUP BY series_instance_uid")
+            .arg(placeholders.join(", ")));
+
+    for (int index = 0; index < uniqueSeriesUids.size(); ++index)
+    {
+        query.bindValue(placeholders.at(index), uniqueSeriesUids.at(index));
+    }
+
+    if (!query.exec())
+    {
+        qWarning() << "Failed to load annotation report summaries:" << query.lastError().text();
+        return summaries;
+    }
+
+    while (query.next())
+    {
+        AnnotationReportSummary summary;
+        summary.seriesInstanceUid = query.value("series_instance_uid").toString();
+        summary.annotationCount = query.value("annotation_count").toInt();
+        summary.annotatedSliceCount = query.value("annotated_slice_count").toInt();
+        summary.distanceCount = query.value("distance_count").toInt();
+        summary.polylineCount = query.value("polyline_count").toInt();
+        summary.angleCount = query.value("angle_count").toInt();
+        summary.rectangleRoiCount = query.value("rectangle_roi_count").toInt();
+        summaries.insert(summary.seriesInstanceUid, summary);
+    }
+
+    return summaries;
+}
+
+AnnotationReportRows SqliteService::loadAnnotationReportRows(const AnnotationReportFilter& filter)
+{
+    AnnotationReportRows rows;
+    if (!ensureConnection())
+    {
+        return rows;
+    }
+
+    QString queryText =
+        "SELECT ma.annotation_id, ma.label, ma.body_region, ma.note, ma.measurement_type, "
+        "ma.length_mm, ma.angle_degrees, ma.mean_value, ma.sample_count, ma.updated_at, "
+        "ma.series_instance_uid, ma.sop_instance_uid, ma.frame_index, di.instance_number, "
+        "se.series_description, se.modality, st.study_date, p.patient_id, p.patient_name "
+        "FROM measurement_annotations ma "
+        "JOIN dicom_slice_metadata di ON di.sop_instance_uid = ma.sop_instance_uid "
+        "JOIN series se ON se.series_instance_uid = ma.series_instance_uid "
+        "JOIN studies st ON st.study_instance_uid = se.study_instance_uid "
+        "JOIN patients p ON p.patient_id = st.patient_id "
+        "WHERE ma.is_deleted = 0 ";
+
+    const QString bodyRegionFilter = filter.bodyRegion.trimmed();
+    const QString normalizedMeasurementType = filter.measurementType.trimmed();
+    const QString normalizedSearchText = filter.searchText.trimmed().toLower();
+    const QString normalizedSeriesInstanceUid = filter.seriesInstanceUid.trimmed();
+    const QString normalizedSopInstanceUid = filter.sopInstanceUid.trimmed();
+    if (!normalizedSeriesInstanceUid.isEmpty())
+    {
+        queryText += "AND ma.series_instance_uid = :series_instance_uid ";
+    }
+    if (!normalizedSopInstanceUid.isEmpty())
+    {
+        queryText += "AND ma.sop_instance_uid = :sop_instance_uid ";
+    }
+    if (filter.frameIndex >= 0)
+    {
+        queryText += "AND ma.frame_index = :frame_index ";
+    }
+    if (!bodyRegionFilter.isEmpty() && bodyRegionFilter != "All")
+    {
+        queryText += "AND ma.body_region = :body_region ";
+    }
+    if (!normalizedMeasurementType.isEmpty() && normalizedMeasurementType != "all")
+    {
+        queryText += "AND ma.measurement_type = :measurement_type ";
+    }
+    if (!normalizedSearchText.isEmpty())
+    {
+        queryText +=
+            "AND (LOWER(COALESCE(ma.label, '')) LIKE :search_pattern OR "
+            "LOWER(COALESCE(ma.note, '')) LIKE :search_pattern OR "
+            "LOWER(COALESCE(ma.body_region, '')) LIKE :search_pattern OR "
+            "LOWER(COALESCE(di.instance_number, '')) LIKE :search_pattern OR "
+            "LOWER(COALESCE(p.patient_name, '')) LIKE :search_pattern OR "
+            "LOWER(COALESCE(p.patient_id, '')) LIKE :search_pattern OR "
+            "LOWER(COALESCE(se.series_description, '')) LIKE :search_pattern OR "
+            "LOWER(COALESCE(se.modality, '')) LIKE :search_pattern OR "
+            "LOWER(COALESCE(st.study_date, '')) LIKE :search_pattern) ";
+    }
+    queryText +=
+        "ORDER BY st.study_date, se.series_instance_uid, "
+        "CASE WHEN di.instance_number IS NOT NULL "
+        "AND di.instance_number GLOB '[0-9]*' "
+        "AND di.instance_number NOT GLOB '*[^0-9]*' "
+        "THEN 0 ELSE 1 END, "
+        "CASE WHEN di.instance_number IS NOT NULL "
+        "AND di.instance_number GLOB '[0-9]*' "
+        "AND di.instance_number NOT GLOB '*[^0-9]*' "
+        "THEN CAST(di.instance_number AS INTEGER) END, "
+        "di.instance_number, ma.frame_index, ma.updated_at DESC, ma.annotation_id LIMIT :limit";
+
+    QSqlQuery query(m_connection->database());
+    query.prepare(queryText);
+    if (!normalizedSeriesInstanceUid.isEmpty())
+    {
+        query.bindValue(":series_instance_uid", normalizedSeriesInstanceUid);
+    }
+    if (!normalizedSopInstanceUid.isEmpty())
+    {
+        query.bindValue(":sop_instance_uid", normalizedSopInstanceUid);
+    }
+    if (filter.frameIndex >= 0)
+    {
+        query.bindValue(":frame_index", filter.frameIndex);
+    }
+    if (!bodyRegionFilter.isEmpty() && bodyRegionFilter != "All")
+    {
+        query.bindValue(":body_region", bodyRegionFilter);
+    }
+    if (!normalizedMeasurementType.isEmpty() && normalizedMeasurementType != "all")
+    {
+        query.bindValue(":measurement_type", normalizedMeasurementType);
+    }
+    if (!normalizedSearchText.isEmpty())
+    {
+        query.bindValue(":search_pattern", "%" + normalizedSearchText + "%");
+    }
+    query.bindValue(":limit", std::clamp(filter.limit, 1, 500));
+
+    if (!query.exec())
+    {
+        qWarning() << "Failed to load annotation report rows:" << query.lastError().text();
+        return rows;
+    }
+
+    while (query.next())
+    {
+        AnnotationReportRow row;
+        row.annotationId = query.value("annotation_id").toString();
+        row.measurementType = measurementTypeFromString(query.value("measurement_type").toString());
+        row.measurementTypeName = measurementTypeDisplayName(row.measurementType);
+        row.label = query.value("label").toString().trimmed();
+        if (row.label.isEmpty())
+        {
+            row.label = defaultAnnotationLabel(row.measurementType);
+        }
+        row.bodyRegion = normalizedBodyRegion(query.value("body_region").toString());
+        row.note = query.value("note").toString();
+        row.displayValue = reportDisplayValue(query, row.measurementType);
+        row.seriesInstanceUid = query.value("series_instance_uid").toString();
+        row.sopInstanceUid = query.value("sop_instance_uid").toString();
+        row.frameIndex = query.value("frame_index").toInt();
+        row.instanceNumber = query.value("instance_number").toString();
+        row.seriesDescription = query.value("series_description").toString();
+        row.modality = query.value("modality").toString();
+        row.studyDate = query.value("study_date").toString();
+        row.patientId = query.value("patient_id").toString();
+        row.patientName = query.value("patient_name").toString();
+        row.updatedAtUtc = dateTimeFromQuery(query, "updated_at");
+        rows.append(row);
+    }
+
+    return rows;
+}
+
+bool SqliteService::updateAnnotationReportMetadata(
+    const QString& annotationId,
+    const QString& label,
+    const QString& bodyRegion,
+    const QString& note)
+{
+    if (annotationId.trimmed().isEmpty() || !ensureConnection())
+    {
+        return false;
+    }
+
+    QSqlQuery query(m_connection->database());
+    query.prepare(
+        "UPDATE measurement_annotations "
+        "SET label = :label, body_region = :body_region, note = :note, updated_at = :updated_at "
+        "WHERE annotation_id = :annotation_id AND is_deleted = 0");
+    query.bindValue(":label", label.trimmed());
+    query.bindValue(":body_region", normalizedBodyRegion(bodyRegion));
+    query.bindValue(":note", note.trimmed());
+    query.bindValue(":updated_at", dateTimeToDatabase(QDateTime::currentDateTimeUtc()));
+    query.bindValue(":annotation_id", annotationId.trimmed());
+
+    if (!query.exec())
+    {
+        qWarning() << "Failed to update annotation report metadata:" << query.lastError().text();
+        return false;
+    }
+
+    return query.numRowsAffected() > 0;
+}
+
+DicomPreviewItems SqliteService::getStudyPreviewItemsForPatient(const QString& patientId)
+{
+    DicomPreviewItems items;
     if (patientId.isEmpty() || !ensureConnection())
     {
-        return QPixmap();
+        return items;
     }
 
     QSqlQuery query(m_connection->database());
     query.prepare(
-        "SELECT se.preview_png "
-        "FROM series se "
-        "JOIN studies s ON s.study_instance_uid = se.study_instance_uid "
-        "WHERE s.patient_id = :patient_id AND se.preview_png IS NOT NULL "
-        "ORDER BY s.study_date, se.series_number, se.series_instance_uid "
-        "LIMIT 1");
+        "SELECT st.study_instance_uid, st.study_description, st.study_date, "
+        "COUNT(se.series_instance_uid) AS series_count, "
+        "(SELECT se2.preview_png "
+        " FROM series se2 "
+        " WHERE se2.study_instance_uid = st.study_instance_uid AND se2.preview_png IS NOT NULL "
+        " ORDER BY se2.series_number, se2.series_instance_uid "
+        " LIMIT 1) AS preview_png "
+        "FROM studies st "
+        "LEFT JOIN series se ON se.study_instance_uid = st.study_instance_uid "
+        "WHERE st.patient_id = :patient_id "
+        "GROUP BY st.study_instance_uid, st.study_description, st.study_date "
+        "ORDER BY st.study_date, st.study_instance_uid");
     query.bindValue(":patient_id", patientId);
 
-    if (!query.exec() || !query.next())
+    if (!query.exec())
     {
-        return QPixmap();
+        qWarning() << "Failed to load study preview items:" << query.lastError().text();
+        return items;
     }
 
-    QPixmap pixmap;
-    pixmap.loadFromData(query.value(0).toByteArray(), "PNG");
-    return pixmap;
+    while (query.next())
+    {
+        const int seriesCount = query.value("series_count").toInt();
+        DicomPreviewItem item;
+        item.title = query.value("study_description").toString().trimmed();
+        if (item.title.isEmpty())
+        {
+            item.title = "Unnamed Study";
+        }
+        item.subtitle = query.value("study_date").toString();
+        item.badgeText = countText(seriesCount, "series", "series");
+        item.targetType = DicomPreviewTargetType::Study;
+        item.targetId = query.value("study_instance_uid").toString();
+        item.parentId = patientId;
+
+        const QByteArray previewPng = query.value("preview_png").toByteArray();
+        if (!previewPng.isEmpty())
+        {
+            item.pixmap.loadFromData(previewPng, "PNG");
+        }
+        items.append(item);
+    }
+
+    return items;
 }
 
-QPixmap PostgreService::getPreviewForStudy(const QString& studyInstanceUid)
+DicomPreviewItems SqliteService::getSeriesPreviewItemsForStudy(const QString& studyInstanceUid)
 {
+    DicomPreviewItems items;
     if (studyInstanceUid.isEmpty() || !ensureConnection())
     {
-        return QPixmap();
+        return items;
     }
 
     QSqlQuery query(m_connection->database());
     query.prepare(
-        "SELECT preview_png "
-        "FROM series "
-        "WHERE study_instance_uid = :study_instance_uid AND preview_png IS NOT NULL "
-        "ORDER BY series_number, series_instance_uid "
-        "LIMIT 1");
+        "SELECT s.series_instance_uid, s.series_description, s.modality, s.preview_png, "
+        "(SELECT " + QString::fromUtf8(kFrameCountSumExpression) + " FROM dicom_slice_metadata di WHERE di.series_instance_uid = s.series_instance_uid) AS image_count "
+        "FROM series s "
+        "WHERE s.study_instance_uid = :study_instance_uid "
+        "ORDER BY s.series_number, s.series_instance_uid");
     query.bindValue(":study_instance_uid", studyInstanceUid);
 
-    if (!query.exec() || !query.next())
+    if (!query.exec())
     {
-        return QPixmap();
+        qWarning() << "Failed to load series preview items:" << query.lastError().text();
+        return items;
     }
 
-    QPixmap pixmap;
-    pixmap.loadFromData(query.value(0).toByteArray(), "PNG");
-    return pixmap;
+    while (query.next())
+    {
+        const int imageCount = query.value("image_count").toInt();
+        const QString modality = query.value("modality").toString().trimmed();
+        const QString description = query.value("series_description").toString().trimmed();
+
+        DicomPreviewItem item;
+        item.title = description.isEmpty() ? QString("Unnamed Series") : description;
+        item.subtitle = modality;
+        item.badgeText = countText(imageCount, "image", "images");
+        item.targetType = DicomPreviewTargetType::Series;
+        item.targetId = query.value("series_instance_uid").toString();
+        item.parentId = studyInstanceUid;
+
+        const QByteArray previewPng = query.value("preview_png").toByteArray();
+        if (!previewPng.isEmpty())
+        {
+            item.pixmap.loadFromData(previewPng, "PNG");
+        }
+        items.append(item);
+    }
+
+    return items;
 }
 
-QPixmap PostgreService::getPreviewForSeries(const QString& seriesInstanceUid)
-{
-    if (seriesInstanceUid.isEmpty() || !ensureConnection())
-    {
-        return QPixmap();
-    }
-
-    QSqlQuery query(m_connection->database());
-    query.prepare(
-        "SELECT preview_png "
-        "FROM series "
-        "WHERE series_instance_uid = :series_instance_uid");
-    query.bindValue(":series_instance_uid", seriesInstanceUid);
-
-    if (!query.exec() || !query.next())
-    {
-        return QPixmap();
-    }
-
-    QPixmap pixmap;
-    pixmap.loadFromData(query.value(0).toByteArray(), "PNG");
-    return pixmap;
-}
-
-bool PostgreService::ensureConnection()
+bool SqliteService::ensureConnection()
 {
     if (!m_connection)
     {
@@ -749,7 +1140,7 @@ bool PostgreService::ensureConnection()
     return true;
 }
 
-bool PostgreService::createTables()
+bool SqliteService::createTables()
 {
     static const char* tableStatements[] = {
         "CREATE TABLE IF NOT EXISTS patients ("
@@ -771,13 +1162,17 @@ bool PostgreService::createTables()
         "series_description TEXT,"
         "modality TEXT,"
         "series_number TEXT,"
-        "preview_png BYTEA"
+        "preview_png BLOB"
         ")",
         "CREATE TABLE IF NOT EXISTS dicom_slice_metadata ("
         "sop_instance_uid TEXT PRIMARY KEY,"
         "series_instance_uid TEXT NOT NULL REFERENCES series(series_instance_uid) ON DELETE CASCADE,"
         "file_path TEXT NOT NULL UNIQUE,"
         "instance_number TEXT,"
+        "frame_count INTEGER NOT NULL DEFAULT 1,"
+        "frame_time_ms REAL,"
+        "cine_rate_fps REAL,"
+        "frame_interval_ms REAL NOT NULL DEFAULT 100,"
         "image_width INTEGER NOT NULL,"
         "image_height INTEGER NOT NULL"
         ")",
@@ -785,20 +1180,24 @@ bool PostgreService::createTables()
         "annotation_id TEXT PRIMARY KEY,"
         "series_instance_uid TEXT NOT NULL REFERENCES series(series_instance_uid) ON DELETE CASCADE,"
         "sop_instance_uid TEXT NOT NULL REFERENCES dicom_slice_metadata(sop_instance_uid) ON DELETE CASCADE,"
+        "frame_index INTEGER NOT NULL DEFAULT 0,"
         "measurement_type TEXT NOT NULL,"
         "points_json TEXT NOT NULL,"
         "color_hex TEXT NOT NULL,"
-        "length_mm DOUBLE PRECISION,"
-        "angle_degrees DOUBLE PRECISION,"
-        "area_mm2 DOUBLE PRECISION,"
+        "length_mm REAL,"
+        "angle_degrees REAL,"
+        "area_mm2 REAL,"
         "sample_count INTEGER,"
-        "mean_value DOUBLE PRECISION,"
-        "stddev_value DOUBLE PRECISION,"
-        "min_value DOUBLE PRECISION,"
-        "max_value DOUBLE PRECISION,"
-        "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),"
-        "updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),"
-        "is_deleted BOOLEAN NOT NULL DEFAULT FALSE"
+        "mean_value REAL,"
+        "stddev_value REAL,"
+        "min_value REAL,"
+        "max_value REAL,"
+        "label TEXT,"
+        "body_region TEXT NOT NULL DEFAULT 'Other',"
+        "note TEXT,"
+        "created_at TEXT NOT NULL DEFAULT (STRFTIME('%Y-%m-%dT%H:%M:%fZ', 'now')),"
+        "updated_at TEXT NOT NULL DEFAULT (STRFTIME('%Y-%m-%dT%H:%M:%fZ', 'now')),"
+        "is_deleted INTEGER NOT NULL DEFAULT 0"
         ")"
     };
 
@@ -807,9 +1206,14 @@ bool PostgreService::createTables()
         QSqlQuery query(m_connection->database());
         if (!query.exec(QString::fromUtf8(statement)))
         {
-            qWarning() << "Failed to create PostgreSQL table:" << query.lastError().text();
+            qWarning() << "Failed to create SQLite table:" << query.lastError().text();
             return false;
         }
+    }
+
+    if (!ensureAnnotationMetadataColumns() || !ensureSliceMetadataColumns())
+    {
+        return false;
     }
 
     static const char* indexStatements[] = {
@@ -818,7 +1222,11 @@ bool PostgreService::createTables()
         "CREATE INDEX IF NOT EXISTS idx_measurement_annotations_sop_instance_uid "
         "ON measurement_annotations(sop_instance_uid)",
         "CREATE INDEX IF NOT EXISTS idx_measurement_annotations_series_sop "
-        "ON measurement_annotations(series_instance_uid, sop_instance_uid)"
+        "ON measurement_annotations(series_instance_uid, sop_instance_uid)",
+        "CREATE INDEX IF NOT EXISTS idx_measurement_annotations_series_sop_frame "
+        "ON measurement_annotations(series_instance_uid, sop_instance_uid, frame_index)",
+        "CREATE INDEX IF NOT EXISTS idx_measurement_annotations_body_region "
+        "ON measurement_annotations(body_region)"
     };
 
     for (const char* statement : indexStatements)
@@ -826,7 +1234,7 @@ bool PostgreService::createTables()
         QSqlQuery query(m_connection->database());
         if (!query.exec(QString::fromUtf8(statement)))
         {
-            qWarning() << "Failed to create PostgreSQL index:" << query.lastError().text();
+            qWarning() << "Failed to create SQLite index:" << query.lastError().text();
             return false;
         }
     }
@@ -834,7 +1242,85 @@ bool PostgreService::createTables()
     return true;
 }
 
-bool PostgreService::saveStudy(const QString& patientId, const Study& study)
+bool SqliteService::ensureAnnotationMetadataColumns()
+{
+    QSet<QString> existingColumns;
+    QSqlQuery columnQuery(m_connection->database());
+    if (!columnQuery.exec("PRAGMA table_info(measurement_annotations)"))
+    {
+        qWarning() << "Failed to inspect measurement annotation columns:" << columnQuery.lastError().text();
+        return false;
+    }
+
+    while (columnQuery.next())
+    {
+        existingColumns.insert(columnQuery.value("name").toString());
+    }
+
+    const QVector<QString> migrationStatements{
+        existingColumns.contains("label") ? QString() : QString("ALTER TABLE measurement_annotations ADD COLUMN label TEXT"),
+        existingColumns.contains("body_region") ? QString() : QString("ALTER TABLE measurement_annotations ADD COLUMN body_region TEXT NOT NULL DEFAULT 'Other'"),
+        existingColumns.contains("note") ? QString() : QString("ALTER TABLE measurement_annotations ADD COLUMN note TEXT"),
+        existingColumns.contains("frame_index") ? QString() : QString("ALTER TABLE measurement_annotations ADD COLUMN frame_index INTEGER NOT NULL DEFAULT 0")};
+
+    for (const QString& statement : migrationStatements)
+    {
+        if (statement.isEmpty())
+        {
+            continue;
+        }
+
+        QSqlQuery query(m_connection->database());
+        if (!query.exec(statement))
+        {
+            qWarning() << "Failed to migrate measurement annotation table:" << query.lastError().text();
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool SqliteService::ensureSliceMetadataColumns()
+{
+    QSet<QString> existingColumns;
+    QSqlQuery columnQuery(m_connection->database());
+    if (!columnQuery.exec("PRAGMA table_info(dicom_slice_metadata)"))
+    {
+        qWarning() << "Failed to inspect DICOM slice metadata columns:" << columnQuery.lastError().text();
+        return false;
+    }
+
+    while (columnQuery.next())
+    {
+        existingColumns.insert(columnQuery.value("name").toString());
+    }
+
+    const QVector<QString> migrationStatements{
+        existingColumns.contains("frame_count") ? QString() : QString("ALTER TABLE dicom_slice_metadata ADD COLUMN frame_count INTEGER NOT NULL DEFAULT 1"),
+        existingColumns.contains("frame_time_ms") ? QString() : QString("ALTER TABLE dicom_slice_metadata ADD COLUMN frame_time_ms REAL"),
+        existingColumns.contains("cine_rate_fps") ? QString() : QString("ALTER TABLE dicom_slice_metadata ADD COLUMN cine_rate_fps REAL"),
+        existingColumns.contains("frame_interval_ms") ? QString() : QString("ALTER TABLE dicom_slice_metadata ADD COLUMN frame_interval_ms REAL NOT NULL DEFAULT 100")};
+
+    for (const QString& statement : migrationStatements)
+    {
+        if (statement.isEmpty())
+        {
+            continue;
+        }
+
+        QSqlQuery query(m_connection->database());
+        if (!query.exec(statement))
+        {
+            qWarning() << "Failed to migrate DICOM slice metadata table:" << query.lastError().text();
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool SqliteService::saveStudy(const QString& patientId, const Study& study)
 {
     QSqlQuery query(m_connection->database());
     query.prepare(
@@ -868,7 +1354,7 @@ bool PostgreService::saveStudy(const QString& patientId, const Study& study)
     return true;
 }
 
-bool PostgreService::saveSeries(const QString& studyInstanceUid, const Series& series)
+bool SqliteService::saveSeries(const QString& studyInstanceUid, const Series& series)
 {
     QByteArray previewPng;
     const QPixmap previewPixmap = createSeriesPreviewPixmap(series);
@@ -913,22 +1399,34 @@ bool PostgreService::saveSeries(const QString& studyInstanceUid, const Series& s
     return true;
 }
 
-bool PostgreService::saveImage(const QString& seriesInstanceUid, const DicomImage& image)
+bool SqliteService::saveImage(const QString& seriesInstanceUid, const DicomImage& image)
 {
     QSqlQuery query(m_connection->database());
     query.prepare(
-        "INSERT INTO dicom_slice_metadata (sop_instance_uid, series_instance_uid, file_path, instance_number, image_width, image_height) "
-        "VALUES (:sop_instance_uid, :series_instance_uid, :file_path, :instance_number, :image_width, :image_height) "
+        "INSERT INTO dicom_slice_metadata ("
+        "sop_instance_uid, series_instance_uid, file_path, instance_number, frame_count, "
+        "frame_time_ms, cine_rate_fps, frame_interval_ms, image_width, image_height) "
+        "VALUES ("
+        ":sop_instance_uid, :series_instance_uid, :file_path, :instance_number, :frame_count, "
+        ":frame_time_ms, :cine_rate_fps, :frame_interval_ms, :image_width, :image_height) "
         "ON CONFLICT (sop_instance_uid) DO UPDATE SET "
         "series_instance_uid = EXCLUDED.series_instance_uid, "
         "file_path = EXCLUDED.file_path, "
         "instance_number = EXCLUDED.instance_number, "
+        "frame_count = EXCLUDED.frame_count, "
+        "frame_time_ms = EXCLUDED.frame_time_ms, "
+        "cine_rate_fps = EXCLUDED.cine_rate_fps, "
+        "frame_interval_ms = EXCLUDED.frame_interval_ms, "
         "image_width = EXCLUDED.image_width, "
         "image_height = EXCLUDED.image_height");
     query.bindValue(":sop_instance_uid", image.sopInstanceUid());
     query.bindValue(":series_instance_uid", seriesInstanceUid);
     query.bindValue(":file_path", image.filePath());
     query.bindValue(":instance_number", image.instanceNumber());
+    query.bindValue(":frame_count", std::max(1, image.frameCount()));
+    query.bindValue(":frame_time_ms", image.frameTimeMs() > 0.0 ? QVariant(image.frameTimeMs()) : QVariant(QMetaType(QMetaType::Double)));
+    query.bindValue(":cine_rate_fps", image.cineRateFps() > 0.0 ? QVariant(image.cineRateFps()) : QVariant(QMetaType(QMetaType::Double)));
+    query.bindValue(":frame_interval_ms", image.cineFrameIntervalMs());
     query.bindValue(":image_width", image.width());
     query.bindValue(":image_height", image.height());
 
@@ -941,7 +1439,7 @@ bool PostgreService::saveImage(const QString& seriesInstanceUid, const DicomImag
     return true;
 }
 
-void PostgreService::populateStudies(Patient& patient)
+void SqliteService::populateStudies(Patient& patient)
 {
     QSqlQuery query(m_connection->database());
     query.prepare(
@@ -964,17 +1462,15 @@ void PostgreService::populateStudies(Patient& patient)
     }
 }
 
-void PostgreService::populateSeries(Study& study)
+void SqliteService::populateSeries(Study& study)
 {
     QSqlQuery query(m_connection->database());
     query.prepare(
         "SELECT s.series_instance_uid, s.series_description, s.modality, s.series_number, s.preview_png, "
-        "(SELECT COUNT(*) FROM dicom_slice_metadata di WHERE di.series_instance_uid = s.series_instance_uid) AS image_count, "
+        "(SELECT " + QString::fromUtf8(kFrameCountSumExpression) + " FROM dicom_slice_metadata di WHERE di.series_instance_uid = s.series_instance_uid) AS image_count, "
         "(SELECT file_path FROM dicom_slice_metadata di "
         " WHERE di.series_instance_uid = s.series_instance_uid "
-        " ORDER BY "
-        " CASE WHEN instance_number ~ '^[0-9]+$' THEN instance_number::INTEGER END NULLS LAST, "
-        " instance_number, sop_instance_uid "
+        " ORDER BY " + QString::fromUtf8(kSliceOrderClause) + " "
         " LIMIT 1) AS representative_file_path "
         "FROM series s WHERE study_instance_uid = :study_instance_uid ORDER BY series_number, series_instance_uid");
     query.bindValue(":study_instance_uid", study.studyInstanceUid());
@@ -1003,16 +1499,13 @@ void PostgreService::populateSeries(Study& study)
     }
 }
 
-void PostgreService::populateImages(Series& series)
+void SqliteService::populateImages(Series& series)
 {
     QSqlQuery query(m_connection->database());
     query.prepare(
-        "SELECT sop_instance_uid, file_path, instance_number, image_width, image_height "
+        "SELECT sop_instance_uid, file_path, instance_number, frame_count, frame_time_ms, cine_rate_fps, frame_interval_ms, image_width, image_height "
         "FROM dicom_slice_metadata WHERE series_instance_uid = :series_instance_uid "
-        "ORDER BY "
-        "CASE WHEN instance_number ~ '^[0-9]+$' THEN instance_number::INTEGER END NULLS LAST, "
-        "instance_number, "
-        "sop_instance_uid");
+        "ORDER BY " + QString::fromUtf8(kSliceOrderClause));
     query.bindValue(":series_instance_uid", series.seriesInstanceUid());
 
     if (!query.exec())
@@ -1025,23 +1518,34 @@ void PostgreService::populateImages(Series& series)
         DicomImagePtr image = createImageFromQuery(query);
         if (image)
         {
-            series.addImage(std::make_unique<DicomImage>(*image));
+            const int frameCount = std::max(1, image->frameCount());
+            for (int frameIndex = 0; frameIndex < frameCount; ++frameIndex)
+            {
+                auto frameImage = std::make_unique<DicomImage>(*image);
+                frameImage->setFrameIndex(frameIndex);
+                series.addImage(std::move(frameImage));
+            }
         }
     }
 }
 
-DatabaseService::DicomImagePtr PostgreService::createImageFromQuery(const QSqlQuery& query) const
+DatabaseService::DicomImagePtr SqliteService::createImageFromQuery(const QSqlQuery& query) const
 {
     auto image = std::make_shared<DicomImage>();
     image->setSopInstanceUid(query.value("sop_instance_uid").toString());
     image->setFilePath(query.value("file_path").toString());
     image->setInstanceNumber(query.value("instance_number").toString());
+    image->setFrameCount(query.value("frame_count").toInt());
+    image->setCineTiming(
+        query.value("frame_time_ms").toDouble(),
+        query.value("cine_rate_fps").toDouble(),
+        query.value("frame_interval_ms").toDouble());
     image->setDimensions(query.value("image_width").toInt(), query.value("image_height").toInt());
 
     return image;
 }
 
-QPixmap PostgreService::createSeriesPreviewPixmap(const Series& series) const
+QPixmap SqliteService::createSeriesPreviewPixmap(const Series& series) const
 {
     if (!series.previewPixmap().isNull())
     {

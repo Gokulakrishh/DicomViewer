@@ -6,8 +6,16 @@
 #include <QSize>
 #include <QtCore/Qt>
 
+/**
+ * @brief Generic viewer interaction event.
+ *
+ * Responsibilities:
+ * - Carry display, normalized, and plane-aware coordinates.
+ * - Decouple reusable tools from Qt/VTK event classes.
+ */
 struct ViewerInputEvent
 {
+    /** @brief Mouse event category. */
     enum class EventType
     {
         MousePress,
@@ -16,6 +24,7 @@ struct ViewerInputEvent
         MouseDoubleClick
     };
 
+    /** @brief Interaction phase. */
     enum class Phase
     {
         Begin,
@@ -34,6 +43,16 @@ struct ViewerInputEvent
     QSize widgetSize;
 };
 
+/**
+ * @brief Creates a generic pan input event.
+ * @param phase Interaction phase.
+ * @param plane MPR slice plane.
+ * @param button Mouse button.
+ * @param displayPosition Position in display pixels.
+ * @param displayDelta Delta in display pixels.
+ * @param widgetSize Source widget size.
+ * @return Viewer input event for pan tools.
+ */
 inline ViewerInputEvent makePanViewerInputEvent(
     ViewerInputEvent::Phase phase,
     MprSlicePlane plane,

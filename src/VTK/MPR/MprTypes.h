@@ -1,5 +1,8 @@
 #pragma once
 
+/**
+ * @brief Orthogonal slice planes used by MPR.
+ */
 enum class MprSlicePlane
 {
     Axial,
@@ -7,6 +10,9 @@ enum class MprSlicePlane
     Sagittal
 };
 
+/**
+ * @brief Active interaction tool in the MPR viewer.
+ */
 enum class MprToolType
 {
     None,
@@ -21,6 +27,9 @@ enum class MprToolType
     Slice
 };
 
+/**
+ * @brief Crosshair/cursor position in volume world coordinates.
+ */
 struct MprCursorPositionWorld
 {
     double x{0.0};

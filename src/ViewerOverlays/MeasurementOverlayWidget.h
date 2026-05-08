@@ -7,9 +7,17 @@
 #include <QPainter>
 #include <QWidget>
 
+/**
+ * @brief Qt overlay for display-space measurement annotations.
+ *
+ * Responsibilities:
+ * - Render measurement geometry, ROI fills, points, and labels.
+ * - Keep overlay drawing independent of measurement persistence.
+ */
 class MeasurementOverlayWidget final : public QWidget
 {
 public:
+    /** @brief Creates the measurement overlay. */
     explicit MeasurementOverlayWidget(QWidget* parent = nullptr)
         : QWidget(parent)
     {
@@ -18,6 +26,7 @@ public:
         setAttribute(Qt::WA_TranslucentBackground);
     }
 
+    /** @brief Replaces the display measurements and repaints. */
     void setMeasurements(const QVector<DisplayMeasurement>& measurements)
     {
         m_measurements = measurements;

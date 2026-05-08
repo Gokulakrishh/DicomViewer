@@ -4,9 +4,17 @@
 #include <QPoint>
 #include <QWidget>
 
+/**
+ * @brief Lightweight Qt overlay that draws crosshair guide lines.
+ *
+ * Responsibilities:
+ * - Render crosshair lines over the image viewport.
+ * - Ignore mouse events so viewer tools receive interaction normally.
+ */
 class CrosshairOverlayWidget : public QWidget
 {
 public:
+    /** @brief Creates the crosshair overlay. */
     explicit CrosshairOverlayWidget(QWidget* parent = nullptr)
         : QWidget(parent)
     {
@@ -15,6 +23,7 @@ public:
         setAttribute(Qt::WA_AlwaysStackOnTop);
     }
 
+    /** @brief Sets crosshair position in widget coordinates. */
     void setPosition(const QPoint& position)
     {
         m_position = position;

@@ -7,12 +7,27 @@
 #include <utility>
 #include <vector>
 
+/**
+ * @brief Typed contiguous scalar volume buffer.
+ *
+ * Responsibilities:
+ * - Own voxel memory and immutable geometry.
+ * - Provide typed voxel access and IVolumeData scalar access.
+ *
+ * Assumptions:
+ * - Buffer size must match geometry.voxelCount().
+ */
 template<VolumeVoxel TVoxel>
 class VolumeData final : public IVolumeData
 {
 public:
     VolumeData() = default;
 
+    /**
+     * @brief Creates a volume from geometry and voxel buffer.
+     * @param geometry Volume dimensions and physical metadata.
+     * @param voxels Contiguous voxel buffer in x-fastest order.
+     */
     VolumeData(VolumeGeometry geometry, std::vector<TVoxel> voxels)
         : m_geometry(std::move(geometry)),
           m_voxels(std::move(voxels))
@@ -28,16 +43,34 @@ public:
         }
     }
 
+    /**
+     * @brief Returns volume geometry.
+     * @return Geometry describing the voxel buffer.
+     */
     [[nodiscard]] const VolumeGeometry& geometry() const override
     {
         return m_geometry;
     }
 
+    /**
+     * @brief Returns a scalar value at a coordinate.
+     * @param x X voxel index.
+     * @param y Y voxel index.
+     * @param z Z voxel index.
+     * @return Voxel value converted to double.
+     */
     [[nodiscard]] double scalarAt(int x, int y, int z) const override
     {
         return static_cast<double>(voxelAt(x, y, z));
     }
 
+    /**
+     * @brief Checks whether a coordinate is inside the volume.
+     * @param x X voxel index.
+     * @param y Y voxel index.
+     * @param z Z voxel index.
+     * @return True when valid.
+     */
     [[nodiscard]] bool isValidIndex(int x, int y, int z) const override
     {
         return x >= 0 && y >= 0 && z >= 0 &&
@@ -46,6 +79,13 @@ public:
                z < m_geometry.dimensions.z;
     }
 
+    /**
+     * @brief Returns the typed voxel value at a coordinate.
+     * @param x X voxel index.
+     * @param y Y voxel index.
+     * @param z Z voxel index.
+     * @return Typed voxel value.
+     */
     [[nodiscard]] TVoxel voxelAt(int x, int y, int z) const
     {
         if (!isValidIndex(x, y, z))
@@ -56,6 +96,10 @@ public:
         return m_voxels[flatIndex(x, y, z)];
     }
 
+    /**
+     * @brief Returns the contiguous voxel buffer.
+     * @return Voxel buffer in x-fastest order.
+     */
     [[nodiscard]] const std::vector<TVoxel>& voxels() const
     {
         return m_voxels;

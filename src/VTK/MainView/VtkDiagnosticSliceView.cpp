@@ -87,16 +87,6 @@ VtkDiagnosticSliceView::VtkDiagnosticSliceView(QWidget* parent)
     m_renderWidget->installEventFilter(this);
     layout->addWidget(m_renderWidget, 1);
 
-    m_patientInfoLabel = new QLabel(m_renderWidget);
-    m_patientInfoLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
-    m_patientInfoLabel->setAlignment(Qt::AlignRight | Qt::AlignTop);
-    m_patientInfoLabel->setStyleSheet(
-        "color: rgba(245, 247, 250, 235);"
-        "background-color: rgba(0, 0, 0, 220);"
-        "padding: 4px 8px;"
-        "border-radius: 4px;");
-    m_patientInfoLabel->hide();
-
     auto configureStatusLabel = [](QLabel* label) {
         label->setAttribute(Qt::WA_TransparentForMouseEvents);
         label->setAlignment(Qt::AlignLeft | Qt::AlignBottom);
@@ -246,42 +236,12 @@ void VtkDiagnosticSliceView::setPatientInfoText(
     const QString& modality,
     const QString& scanDate)
 {
-    QStringList lines;
-    if (!patientName.trimmed().isEmpty())
-    {
-        lines << QString("Name: %1").arg(patientName.trimmed());
-    }
-    if (!age.trimmed().isEmpty())
-    {
-        lines << QString("Age: %1").arg(age.trimmed());
-    }
-    if (!dateOfBirth.trimmed().isEmpty())
-    {
-        lines << QString("DOB: %1").arg(dateOfBirth.trimmed());
-    }
-    if (!doctor.trimmed().isEmpty())
-    {
-        lines << QString("Doctor: %1").arg(doctor.trimmed());
-    }
-    if (!modality.trimmed().isEmpty())
-    {
-        lines << QString("Modality: %1").arg(modality.trimmed());
-    }
-    if (!scanDate.trimmed().isEmpty())
-    {
-        lines << QString("Scan Date: %1").arg(scanDate.trimmed());
-    }
-
-    if (lines.isEmpty())
-    {
-        m_patientInfoLabel->clear();
-        m_patientInfoLabel->hide();
-        return;
-    }
-
-    m_patientInfoLabel->setText(lines.join('\n'));
-    m_patientInfoLabel->setVisible(true);
-    layoutOverlayWidgets();
+    Q_UNUSED(patientName)
+    Q_UNUSED(age)
+    Q_UNUSED(dateOfBirth)
+    Q_UNUSED(doctor)
+    Q_UNUSED(modality)
+    Q_UNUSED(scanDate)
 }
 
 void VtkDiagnosticSliceView::setWindowLevelWidth(int windowLevel, int windowWidth)
@@ -381,10 +341,14 @@ void VtkDiagnosticSliceView::clearMeasurements()
     refreshMeasurementOverlay();
 }
 
-void VtkDiagnosticSliceView::setSliceAnnotationContext(const QString& seriesInstanceUid, const QString& sopInstanceUid)
+void VtkDiagnosticSliceView::setSliceAnnotationContext(
+    const QString& seriesInstanceUid,
+    const QString& sopInstanceUid,
+    int frameIndex)
 {
     m_currentSeriesInstanceUid = seriesInstanceUid;
     m_currentSopInstanceUid = sopInstanceUid;
+    m_currentFrameIndex = std::max(0, frameIndex);
 }
 
 void VtkDiagnosticSliceView::loadSliceAnnotations(const QList<SliceMeasurementAnnotationRecord>& records)
@@ -860,6 +824,7 @@ QList<SliceMeasurementAnnotationRecord> VtkDiagnosticSliceView::currentSliceAnno
         SliceMeasurementAnnotationRecord record;
         record.seriesInstanceUid = m_currentSeriesInstanceUid;
         record.sopInstanceUid = m_currentSopInstanceUid;
+        record.frameIndex = m_currentFrameIndex;
         record.measurement = measurement;
         if (measurement.type == MeasurementType::Angle)
         {
@@ -895,6 +860,8 @@ void VtkDiagnosticSliceView::buildControls()
 
     m_sliceSlider = new QSlider(Qt::Horizontal, m_cineBar);
     m_sliceSlider->setRange(0, 0);
+    m_sliceSlider->setTickPosition(QSlider::TicksBelow);
+    m_sliceSlider->setTickInterval(1);
     connect(m_sliceSlider, &QSlider::valueChanged, this, &VtkDiagnosticSliceView::sliceIndexSelected);
 
     m_sliceLabel = new QLabel("0 / 0", m_cineBar);
@@ -930,15 +897,6 @@ void VtkDiagnosticSliceView::layoutOverlayWidgets()
 {
     constexpr int margin = 8;
     constexpr int spacing = 4;
-
-    if (m_patientInfoLabel && m_patientInfoLabel->isVisible())
-    {
-        m_patientInfoLabel->adjustSize();
-        m_patientInfoLabel->move(
-            std::max(margin, m_renderWidget->width() - m_patientInfoLabel->width() - margin),
-            margin);
-        m_patientInfoLabel->raise();
-    }
 
     int y = m_renderWidget->height() - margin;
     const auto positionStatusLabel = [&](QLabel* label) {

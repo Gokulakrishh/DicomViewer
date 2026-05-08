@@ -5,6 +5,12 @@
 class DicomImage;
 class Series;
 
+/**
+ * @brief Built-in window/level presets available in the viewport.
+ *
+ * DICOM-provided presets are tracked separately by index so the built-in set can
+ * remain stable and centrally reusable.
+ */
 enum class ViewportWindowPreset
 {
     Custom = 0,
@@ -14,9 +20,24 @@ enum class ViewportWindowPreset
     Lung
 };
 
+/**
+ * @brief Mutable session state for the main DICOM viewport.
+ *
+ * Responsibilities:
+ * - Store active series/image selection.
+ * - Store current windowing and cine state.
+ * - Track a generation counter for asynchronous preload validity.
+ *
+ * Assumptions:
+ * - The session is owned by DicomViewportController and not shared directly for
+ *   mutation outside that controller.
+ */
 class ViewportSession
 {
 public:
+    /**
+     * @brief Resets the viewport session to an empty state.
+     */
     void clear();
 
     std::shared_ptr<Series> currentSeries;

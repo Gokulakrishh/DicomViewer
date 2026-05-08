@@ -1,0 +1,29 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "dicomviewer",
+  "version-string": "0.1.0",
+  "dependencies": [
+    {
+      "name": "qtbase",
+      "default-features": false,
+      "features": [
+        "concurrent",
+        "gui",
+        "network",
+        "opengl",
+        "sql",
+        "sql-sqlite",
+        "widgets"
+      ]
+    },
+    {
+      "name": "vtk",
+      "default-features": false,
+      "features": [
+        "opengl",
+        "qt"
+      ]
+    },
+    "gdcm"
+  ]
+}

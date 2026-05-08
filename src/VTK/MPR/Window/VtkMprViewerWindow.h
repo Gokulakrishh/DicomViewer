@@ -15,11 +15,19 @@ class QMenu;
 class IVolumeData;
 class VtkMprView;
 
+/**
+ * @brief Top-level MPR viewer window.
+ *
+ * Responsibilities:
+ * - Own MPR toolbar/preset presentation.
+ * - Host VtkMprView for synchronized orthogonal slice viewing.
+ */
 class VtkMprViewerWindow : public QMainWindow
 {
     Q_OBJECT
 
 public:
+    /** @brief Creates the MPR viewer window. */
     explicit VtkMprViewerWindow(
         std::shared_ptr<IVolumeData> volume,
         int initialWindowLevel,

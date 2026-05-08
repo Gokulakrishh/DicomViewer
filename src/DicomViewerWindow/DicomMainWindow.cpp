@@ -41,15 +41,17 @@
 #include "AI/QtHttpAiServerClient.h"
 #include "Utilities/AiApiKeyDialog.h"
 #include "Utilities/AiMessageFormatter.h"
+#include "Utilities/AppIcons.h"
 #include "Utilities/DiagnosticImageRenderer.h"
 #include "Utilities/IAppConfigService.h"
 #include "Utilities/MemoryManagementDebug.h"
 #include "Utilities/LoadingDialog.h"
 #include "Utilities/IWarningDialogService.h"
-#include "Database/PostgreService.h"
+#include "Database/SqliteService.h"
 #include "FileHandling/GDCMFileHandling.h"
 #include "Model/MedicalImage.h"
 #include "ViewerTools/WindowLevelPreset.h"
+#include "Services/AnnotationReportService.h"
 #include "Services/AdvancedSeriesVolumeService.h"
 #include "Services/ThreeDProfiles/ThreeDProfileSelection.h"
 
@@ -114,6 +116,7 @@ DicomMainWindow::DicomMainWindow(
         m_warningDialogService->setParentWidget(this);
     }
     m_ui->setupUi(this);
+    setWindowIcon(AppIcons::applicationIcon());
     setUiComponents();
     resize(1200, 800);
 }
@@ -127,22 +130,40 @@ void DicomMainWindow::setUiComponents()
 {
     setupMenuBar();
     setupViewerToolbar();
-    setupLeftPanel();
+    setupStudyBrowserDock();
     setupViewerSurface();
     setupLegacyViewerControls();
     setupCoreServices();
-    setupAiDock();
+    setupAnnotationReportDock();
     setupAsyncInfrastructure();
     initializeDatabaseAndTree();
     setupConnections();
 }
 
-void DicomMainWindow::setupLeftPanel()
+void DicomMainWindow::setupStudyBrowserDock()
 {
-    m_treePanel = new DicomTreePanel(this);
+    if (m_ui->leftPanelHost)
+    {
+        m_ui->horizontalLayout->removeWidget(m_ui->leftPanelHost);
+        m_ui->leftPanelHost->deleteLater();
+    }
+
+    m_studyBrowserDock = new QDockWidget("Study Browser", this);
+    m_studyBrowserDock->setObjectName("studyBrowserDock");
+    m_studyBrowserDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+    m_studyBrowserDock->setFeatures(
+        QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable | QDockWidget::DockWidgetClosable);
+
+    m_treePanel = new DicomTreePanel(m_studyBrowserDock);
     m_treeController = new DicomTreeController(this);
-    m_ui->horizontalLayout->replaceWidget(m_ui->leftPanelHost, m_treePanel);
-    m_ui->leftPanelHost->deleteLater();
+    m_studyBrowserDock->setWidget(m_treePanel);
+    m_studyBrowserDock->setMinimumWidth(320);
+    addDockWidget(Qt::LeftDockWidgetArea, m_studyBrowserDock);
+
+    if (m_ui->viewMenu)
+    {
+        m_ui->viewMenu->addAction(m_studyBrowserDock->toggleViewAction());
+    }
 }
 
 void DicomMainWindow::setupViewerSurface()
@@ -181,18 +202,18 @@ void DicomMainWindow::setupCoreServices()
     m_viewportController = std::make_unique<DicomViewportController>(
         m_gdcmHandler.get(),
         this);
-    rebuildAiAssistantService();
-    m_databaseService = std::make_unique<PostgreService>(m_appConfigService->loadDatabaseSettings());
+    m_databaseService = std::make_unique<SqliteService>(m_appConfigService->loadDatabaseSettings());
     m_measurementAnnotationStore = std::make_unique<MeasurementAnnotationStore>(*m_databaseService);
+    m_annotationReportService = std::make_unique<AnnotationReportService>(*m_databaseService);
     if (m_treeController)
     {
         m_treeController->setDatabaseService(m_databaseService.get());
+        m_treeController->setAnnotationReportService(m_annotationReportService.get());
     }
 }
 
 void DicomMainWindow::setupAsyncInfrastructure()
 {
-    m_aiResponseWatcher = new QFutureWatcher<AiChatResponse>(this);
     m_folderImportWatcher = new QFutureWatcher<FolderImportResult>(this);
 }
 
@@ -201,10 +222,9 @@ void DicomMainWindow::initializeDatabaseAndTree()
     const bool databaseInitialized = m_databaseService->initialize();
     if (!databaseInitialized)
     {
-        const QString warningMessage =
-            m_databaseService->lastErrorText() + " Config file: " + m_appConfigService->configFilePath();
+        const QString warningMessage = m_databaseService->lastErrorText();
         statusBar()->showMessage(warningMessage, 10000);
-        m_warningDialogService->showWarning("Database Configuration", warningMessage);
+        m_warningDialogService->showWarning("Local Database", warningMessage);
     }
 
     refreshHierarchyForGlobalSearch();
@@ -218,10 +238,6 @@ void DicomMainWindow::setupMenuBar()
     m_openFolderAction = new QAction("Open Folder", this);
     m_ui->fileMenu->addAction(m_openFolderAction);
 
-    m_aiPreferencesAction = new QAction("Preferences...", this);
-    m_aiPreferencesAction->setMenuRole(QAction::PreferencesRole);
-    m_ui->fileMenu->addAction(m_aiPreferencesAction);
-
     m_openMprAction = new QAction("Open MPR Viewer", this);
     m_ui->viewMenu->addAction(m_openMprAction);
     m_openThreeDAction = new QAction("3D", this);
@@ -229,7 +245,6 @@ void DicomMainWindow::setupMenuBar()
 
     connect(m_openFileAction, &QAction::triggered, this, &DicomMainWindow::openImage);
     connect(m_openFolderAction, &QAction::triggered, this, &DicomMainWindow::openFolder);
-    connect(m_aiPreferencesAction, &QAction::triggered, this, &DicomMainWindow::openAiPreferences);
     connect(m_openMprAction, &QAction::triggered, this, &DicomMainWindow::openMprViewer);
     connect(m_openThreeDAction, &QAction::triggered, this, &DicomMainWindow::openThreeDViewer);
 }
@@ -308,6 +323,28 @@ void DicomMainWindow::setupConnections()
     {
         connect(m_folderImportWatcher, &QFutureWatcher<FolderImportResult>::finished, this, &DicomMainWindow::onFolderImportFinished);
     }
+
+    if (m_annotationReportPanel)
+    {
+        connect(m_annotationReportPanel, &AnnotationReportDock::filterChanged, this, &DicomMainWindow::onAnnotationReportFilterChanged);
+        connect(
+            m_annotationReportPanel,
+            &AnnotationReportDock::goToSliceRequested,
+            this,
+            &DicomMainWindow::onAnnotationReportGoToSliceRequested);
+        connect(
+            m_annotationReportPanel,
+            &AnnotationReportDock::metadataChanged,
+            this,
+            &DicomMainWindow::onAnnotationReportMetadataChanged);
+        connect(
+            m_annotationReportPanel,
+            &AnnotationReportDock::deleteRequested,
+            this,
+            &DicomMainWindow::onAnnotationReportDeleteRequested);
+    }
+
+    refreshAnnotationReportDock();
 }
 
 void DicomMainWindow::clearCurrentSeries()
@@ -342,10 +379,10 @@ void DicomMainWindow::clearCurrentSeries()
     m_currentModality.clear();
     m_currentStudyDate.clear();
     m_activeSliceSopInstanceUid.clear();
+    m_activeSliceFrameIndex = 0;
     m_loadedSliceAnnotationIds.clear();
     if (m_view)
     {
-        m_view->setPatientInfoText({}, {}, {}, {}, {}, {});
         m_view->setSliceAnnotationContext({}, {});
         m_view->loadSliceAnnotations({});
     }
@@ -380,16 +417,7 @@ void DicomMainWindow::updatePatientInfo(
     m_currentModality = modality.trimmed();
     m_currentStudyDate = studyDate.trimmed();
 
-    if (m_view)
-    {
-        m_view->setPatientInfoText(
-            m_currentPatientName,
-            m_currentPatientAge,
-            m_currentPatientDob,
-            m_currentDoctorName,
-            m_currentModality,
-            m_currentStudyDate);
-    }
+    refreshAnnotationReportDock();
 }
 
 void DicomMainWindow::updateCineControls()
@@ -444,6 +472,11 @@ void DicomMainWindow::displayCurrentSlice()
     const bool cinePlaying = m_viewportController->isCinePlaying();
     if (!m_viewportController->prepareCurrentSeriesImage(cinePlaying, &failedFilePath))
     {
+        if (cinePlaying)
+        {
+            return;
+        }
+
         const QString warningMessage = "Failed to load image: " + QFileInfo(failedFilePath).fileName();
         statusBar()->showMessage(warningMessage, 4000);
         m_warningDialogService->showWarning("Image Loading", warningMessage);
@@ -451,10 +484,19 @@ void DicomMainWindow::displayCurrentSlice()
         return;
     }
 
-    if (!cinePlaying)
-    {
-    }
     applyImageAdjustments();
+    if (cinePlaying)
+    {
+        if (m_view)
+        {
+            const auto currentSeries = m_viewportController->currentSeries();
+            m_view->setSliceNavigationState(
+                m_viewportController->currentImageIndex(),
+                currentSeries ? static_cast<int>(currentSeries->images().size()) : 0);
+        }
+        return;
+    }
+
     loadCurrentSliceAnnotations();
 
     const auto currentSeries = m_viewportController->currentSeries();
@@ -488,17 +530,23 @@ void DicomMainWindow::loadCurrentSliceAnnotations()
     if (!currentSeries || !currentImage)
     {
         m_activeSliceSopInstanceUid.clear();
+        m_activeSliceFrameIndex = 0;
         m_loadedSliceAnnotationIds.clear();
         m_view->setSliceAnnotationContext({}, {});
         m_view->loadSliceAnnotations({});
+        refreshAnnotationReportDock();
         return;
     }
 
-    m_view->setSliceAnnotationContext(currentSeries->seriesInstanceUid(), currentImage->sopInstanceUid());
+    m_view->setSliceAnnotationContext(
+        currentSeries->seriesInstanceUid(),
+        currentImage->sopInstanceUid(),
+        currentImage->frameIndex());
     m_activeSliceSopInstanceUid = currentImage->sopInstanceUid();
+    m_activeSliceFrameIndex = currentImage->frameIndex();
 
     const QList<SliceMeasurementAnnotationRecord> records = m_measurementAnnotationStore
-        ? m_measurementAnnotationStore->loadSliceAnnotations(m_activeSliceSopInstanceUid)
+        ? m_measurementAnnotationStore->loadSliceAnnotations(m_activeSliceSopInstanceUid, m_activeSliceFrameIndex)
         : QList<SliceMeasurementAnnotationRecord>{};
 
     m_loadedSliceAnnotationIds.clear();
@@ -508,6 +556,7 @@ void DicomMainWindow::loadCurrentSliceAnnotations()
     }
 
     m_view->loadSliceAnnotations(records);
+    refreshAnnotationReportDock();
 }
 
 void DicomMainWindow::loadSeries(const std::shared_ptr<Series>& series, int initialIndex)
@@ -521,10 +570,6 @@ void DicomMainWindow::loadSeries(const std::shared_ptr<Series>& series, int init
 
     m_viewportController->setSeries(series, initialIndex);
     m_resetViewerFitOnNextImage = true;
-    if (m_treePanel)
-    {
-        m_treePanel->updateSeriesPreview(series);
-    }
     const int imageCount = m_viewportController->imageCount();
 
     if (m_view)
@@ -1043,13 +1088,14 @@ void DicomMainWindow::openImage()
         {
             if (m_databaseService->savePatient(patientHierarchy))
             {
-                statusMessage += " | Imported into PostgreSQL";
+                statusMessage += " | Imported into local database";
                 refreshHierarchyForGlobalSearch();
+                refreshAnnotationReportDock();
             }
             else
             {
-                statusMessage += " | PostgreSQL save failed";
-                m_warningDialogService->showWarning("Database Import", "Failed to save the selected DICOM into PostgreSQL.");
+                statusMessage += " | Local database save failed";
+                m_warningDialogService->showWarning("Database Import", "Failed to save the selected DICOM into the local database.");
             }
         }
     }
@@ -1120,7 +1166,7 @@ void DicomMainWindow::openFolder()
         };
 
         GDCMFileHandling fileHandling;
-        PostgreService databaseService(databaseSettings);
+        SqliteService databaseService(databaseSettings);
         result.initializeSucceeded = databaseService.initialize();
         if (!result.initializeSucceeded)
         {
@@ -1305,7 +1351,9 @@ void DicomMainWindow::onCineToggled(bool checked)
 
     if (checked && m_viewportController && m_viewportController->hasPlayableSeries())
     {
-        m_cineTimer->start();
+        QString ignoredLoadError;
+        m_viewportController->prepareCurrentSeriesImage(true, &ignoredLoadError);
+        m_cineTimer->start(m_viewportController->cineIntervalMs());
     }
     else
     {
@@ -1321,6 +1369,7 @@ void DicomMainWindow::advanceCinePlayback()
     }
 
     onImageSliderValueChanged(m_viewportController->nextCineIndex());
+    m_cineTimer->setInterval(m_viewportController->cineIntervalMs());
 }
 
 void DicomMainWindow::onLocalSearchTextChanged(const QString& text)
@@ -1397,6 +1446,106 @@ void DicomMainWindow::onSliceAnnotationsChanged(const QList<SliceMeasurementAnno
     }
 
     m_loadedSliceAnnotationIds = currentAnnotationIds;
+
+    const auto currentSeries = m_viewportController ? m_viewportController->currentSeries() : nullptr;
+    if (m_treeController && currentSeries)
+    {
+        m_treeController->refreshSeriesAnnotationSummary(currentSeries->seriesInstanceUid());
+    }
+    refreshAnnotationReportDock();
+}
+
+void DicomMainWindow::onAnnotationReportFilterChanged()
+{
+    refreshAnnotationReportDock();
+}
+
+void DicomMainWindow::onAnnotationReportGoToSliceRequested(
+    const QString& seriesInstanceUid,
+    const QString& sopInstanceUid,
+    int frameIndex,
+    const QString& annotationId)
+{
+    Q_UNUSED(annotationId);
+    if (!m_databaseService || seriesInstanceUid.trimmed().isEmpty())
+    {
+        return;
+    }
+
+    const auto series = m_databaseService->getSeries(seriesInstanceUid);
+    if (!series || series->images().empty())
+    {
+        statusBar()->showMessage("Annotation source series could not be loaded.", 4000);
+        return;
+    }
+
+    int targetIndex = 0;
+    for (int index = 0; index < static_cast<int>(series->images().size()); ++index)
+    {
+        const auto& image = series->images()[static_cast<std::size_t>(index)];
+        if (image && image->sopInstanceUid() == sopInstanceUid && image->frameIndex() == std::max(0, frameIndex))
+        {
+            targetIndex = index;
+            break;
+        }
+    }
+
+    loadSeries(series, targetIndex);
+}
+
+void DicomMainWindow::onAnnotationReportMetadataChanged(
+    const QString& annotationId,
+    const QString& label,
+    const QString& bodyRegion,
+    const QString& seriesInstanceUid)
+{
+    if (!m_annotationReportService)
+    {
+        return;
+    }
+
+    if (!m_annotationReportService->updateMetadata(annotationId, label, bodyRegion))
+    {
+        statusBar()->showMessage("Failed to update annotation details.", 4000);
+        return;
+    }
+
+    if (m_treeController)
+    {
+        m_treeController->refreshSeriesAnnotationSummary(seriesInstanceUid);
+    }
+    refreshAnnotationReportDock();
+}
+
+void DicomMainWindow::onAnnotationReportDeleteRequested(
+    const QString& annotationId,
+    const QString& seriesInstanceUid,
+    const QString& sopInstanceUid,
+    int frameIndex)
+{
+    if (!m_annotationReportService || annotationId.trimmed().isEmpty())
+    {
+        return;
+    }
+
+    if (!m_annotationReportService->deleteAnnotation(annotationId))
+    {
+        statusBar()->showMessage("Failed to delete annotation.", 4000);
+        return;
+    }
+
+    if (m_treeController)
+    {
+        m_treeController->refreshSeriesAnnotationSummary(seriesInstanceUid);
+    }
+
+    if (sopInstanceUid == m_activeSliceSopInstanceUid && std::max(0, frameIndex) == m_activeSliceFrameIndex)
+    {
+        loadCurrentSliceAnnotations();
+        return;
+    }
+
+    refreshAnnotationReportDock();
 }
 
 void DicomMainWindow::onFolderImportFinished()
@@ -1417,7 +1566,7 @@ void DicomMainWindow::onFolderImportFinished()
     if (!result.initializeSucceeded)
     {
         const QString message = result.errorMessage.trimmed().isEmpty()
-                                    ? QString("Failed to initialize PostgreSQL for folder import.")
+                                    ? QString("Failed to initialize the local database for folder import.")
                                     : result.errorMessage;
         statusBar()->showMessage(message, 6000);
         m_warningDialogService->showWarning("Folder Import", message);
@@ -1434,12 +1583,13 @@ void DicomMainWindow::onFolderImportFinished()
     if (result.importedPatientCount == 0)
     {
         const QString message = result.errorMessage.trimmed().isEmpty()
-                                    ? QString("The folder was scanned, but no patient hierarchy could be saved into PostgreSQL.")
+                                    ? QString("The folder was scanned, but no patient hierarchy could be saved into the local database.")
                                     : result.errorMessage;
         m_warningDialogService->showWarning("Database Import", message);
     }
 
     refreshHierarchyForGlobalSearch();
+    refreshAnnotationReportDock();
     statusBar()->showMessage(
         QString("Imported folder %1 | Patients saved: %2").arg(result.folderName).arg(result.importedPatientCount),
         6000);
@@ -1455,82 +1605,70 @@ void DicomMainWindow::refreshHierarchyForGlobalSearch()
     m_treeController->refreshHierarchy();
 }
 
-void DicomMainWindow::setupAiDock()
+void DicomMainWindow::refreshAnnotationReportDock()
 {
-    m_aiDock = new QDockWidget("Ask AI", this);
-    m_aiDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
-    m_aiDock->setFeatures(
+    if (!m_annotationReportPanel || !m_annotationReportService)
+    {
+        return;
+    }
+
+    const AnnotationCurrentSliceContext context = currentAnnotationSliceContext();
+    m_annotationReportPanel->setCurrentSliceContext(context);
+    m_annotationReportPanel->setCurrentSliceRows(
+        context.hasSlice
+            ? m_annotationReportService->loadCurrentSliceRows(
+                context.seriesInstanceUid,
+                context.sopInstanceUid,
+                context.frameIndex)
+            : AnnotationReportRows{});
+
+    AnnotationReportFilter filter = m_annotationReportPanel->currentFilter();
+    m_annotationReportPanel->setSliceGroups(m_annotationReportService->loadSliceGroups(filter));
+}
+
+AnnotationCurrentSliceContext DicomMainWindow::currentAnnotationSliceContext() const
+{
+    AnnotationCurrentSliceContext context;
+    if (!m_viewportController)
+    {
+        return context;
+    }
+
+    const auto currentSeries = m_viewportController->currentSeries();
+    const DicomImage* currentImage = m_viewportController->currentImage();
+    if (!currentSeries || !currentImage)
+    {
+        return context;
+    }
+
+    context.hasSlice = true;
+    context.seriesInstanceUid = currentSeries->seriesInstanceUid();
+    context.sopInstanceUid = currentImage->sopInstanceUid();
+    context.frameIndex = currentImage->frameIndex();
+    context.patientName = m_currentPatientName;
+    context.patientAge = m_currentPatientAge;
+    context.patientDob = m_currentPatientDob;
+    context.doctorName = m_currentDoctorName;
+    context.studyDate = m_currentStudyDate;
+    context.seriesDescription = currentSeries->seriesDescription();
+    context.modality = currentSeries->modality();
+    context.instanceNumber = currentImage->instanceNumber();
+    context.sliceIndex = m_viewportController->currentImageIndex();
+    context.sliceCount = static_cast<int>(currentSeries->images().size());
+    return context;
+}
+
+void DicomMainWindow::setupAnnotationReportDock()
+{
+    m_annotationReportDock = new QDockWidget("Annotations", this);
+    m_annotationReportDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+    m_annotationReportDock->setFeatures(
         QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable | QDockWidget::DockWidgetClosable);
 
-    auto* dockContentWidget = new QWidget(m_aiDock);
-    auto* dockLayout = new QVBoxLayout(dockContentWidget);
-    dockLayout->setContentsMargins(8, 8, 8, 8);
-    dockLayout->setSpacing(8);
-
-    m_aiChatHistoryEdit = new QTextEdit(dockContentWidget);
-    m_aiChatHistoryEdit->setReadOnly(true);
-    m_aiChatHistoryEdit->setPlaceholderText("AI answers will appear here.");
-    m_aiChatHistoryEdit->setMinimumHeight(140);
-
-    m_aiPromptEdit = new QPlainTextEdit(dockContentWidget);
-    m_aiPromptEdit->setPlaceholderText(
-        "Ask about the current scan, anatomy, modality, windowing, or measurements...");
-    m_aiPromptEdit->setMaximumBlockCount(200);
-    m_aiPromptEdit->setMinimumHeight(80);
-
-    m_aiIncludeImageCheckBox = new QCheckBox("Include current image", dockContentWidget);
-    m_aiIncludeImageCheckBox->setChecked(true);
-
-    m_aiModelComboBox = new QComboBox(dockContentWidget);
-
-    m_aiReasoningComboBox = new QComboBox(dockContentWidget);
-    m_aiReasoningComboBox->addItem("Low");
-    m_aiReasoningComboBox->addItem("Medium");
-    m_aiReasoningComboBox->addItem("High");
-
-    const auto aiSettings = m_appConfigService ? m_appConfigService->loadAiServiceSettings() : AiServiceSettings{};
-    m_aiReasoningComboBox->setCurrentIndex(static_cast<int>(aiSettings.defaultReasoningLevel));
-
-    m_aiAskButton = new QPushButton("Ask AI", dockContentWidget);
-    m_aiAskButton->setObjectName("primaryActionButton");
-    m_aiClearButton = new QPushButton("Clear", dockContentWidget);
-
-    auto* modelLayout = new QVBoxLayout();
-    modelLayout->setContentsMargins(0, 0, 0, 0);
-    modelLayout->setSpacing(4);
-    modelLayout->addWidget(new QLabel("Model", dockContentWidget));
-    modelLayout->addWidget(m_aiModelComboBox);
-
-    auto* optionsRowLayout = new QHBoxLayout();
-    optionsRowLayout->setContentsMargins(0, 0, 0, 0);
-    optionsRowLayout->setSpacing(8);
-
-    auto* reasoningLayout = new QVBoxLayout();
-    reasoningLayout->setContentsMargins(0, 0, 0, 0);
-    reasoningLayout->setSpacing(4);
-    reasoningLayout->addWidget(new QLabel("Reasoning", dockContentWidget));
-    reasoningLayout->addWidget(m_aiReasoningComboBox);
-
-    optionsRowLayout->addWidget(m_aiIncludeImageCheckBox, 2, Qt::AlignBottom);
-    optionsRowLayout->addLayout(reasoningLayout, 1);
-
-    dockLayout->addWidget(new QLabel("Conversation", dockContentWidget));
-    dockLayout->addWidget(m_aiChatHistoryEdit, 3);
-    dockLayout->addWidget(new QLabel("Question", dockContentWidget));
-    dockLayout->addWidget(m_aiPromptEdit, 1);
-    dockLayout->addLayout(modelLayout);
-    dockLayout->addLayout(optionsRowLayout);
-    auto* actionLayout = new QHBoxLayout();
-    actionLayout->setContentsMargins(0, 0, 0, 0);
-    actionLayout->setSpacing(8);
-    actionLayout->addWidget(m_aiClearButton);
-    actionLayout->addWidget(m_aiAskButton, 1);
-    dockLayout->addLayout(actionLayout);
-
-    m_aiDock->setWidget(dockContentWidget);
-    addDockWidget(Qt::RightDockWidgetArea, m_aiDock);
-    m_aiDock->setMinimumHeight(260);
-    refreshAiDockState();
+    m_annotationReportPanel = new AnnotationReportDock(m_annotationReportDock);
+    m_annotationReportDock->setWidget(m_annotationReportPanel);
+    addDockWidget(Qt::RightDockWidgetArea, m_annotationReportDock);
+    m_annotationReportDock->setMinimumHeight(260);
 }
 
 void DicomMainWindow::setViewerInteractionMode(bool windowLevelEnabled, bool zoomEnabled, bool panEnabled)

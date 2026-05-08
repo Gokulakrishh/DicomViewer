@@ -7,6 +7,12 @@
 #include <algorithm>
 #include <memory>
 
+/**
+ * @brief Creates a bounded thumbnail pixmap.
+ * @param image Source image.
+ * @param maxDimension Maximum width/height in pixels.
+ * @return Scaled pixmap, or empty pixmap for null input.
+ */
 inline QPixmap createThumbnailPixmap(const QImage& image, int maxDimension = 192)
 {
     if (image.isNull())
@@ -22,6 +28,13 @@ inline QPixmap createThumbnailPixmap(const QImage& image, int maxDimension = 192
     return QPixmap::fromImage(scaledImage);
 }
 
+/**
+ * @brief Renders a monochrome DICOM image using WL/WW.
+ * @param image Source DICOM image with raw pixels.
+ * @param windowLevel Window center/level.
+ * @param windowWidth Window width.
+ * @return 8-bit grayscale image.
+ */
 inline QImage createWindowedImage(const DicomImage& image, int windowLevel, int windowWidth)
 {
     const double widthValue = std::max(1, windowWidth);
@@ -45,6 +58,12 @@ inline QImage createWindowedImage(const DicomImage& image, int windowLevel, int 
     return renderedPixmap;
 }
 
+/**
+ * @brief Creates a thumbnail preview for a DICOM image.
+ * @param image Source DICOM image.
+ * @param maxDimension Maximum thumbnail size.
+ * @return Preview pixmap.
+ */
 inline QPixmap createDicomPreviewPixmap(const DicomImage& image, int maxDimension = 192)
 {
     if (image.hasRawPixels() && image.isMonochrome())
@@ -57,6 +76,13 @@ inline QPixmap createDicomPreviewPixmap(const DicomImage& image, int maxDimensio
     return createThumbnailPixmap(image.pixmap().toImage(), maxDimension);
 }
 
+/**
+ * @brief Creates a rendered copy of a DICOM image for display.
+ * @param image Source image.
+ * @param windowLevel Window center/level.
+ * @param windowWidth Window width.
+ * @return Shared rendered DICOM image copy.
+ */
 inline std::shared_ptr<DicomImage> renderDiagnosticImage(const DicomImage& image, int windowLevel, int windowWidth)
 {
     auto renderedImage = std::make_shared<DicomImage>(image);

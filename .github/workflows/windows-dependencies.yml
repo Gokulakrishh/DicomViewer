@@ -1,0 +1,169 @@
+name: Publish Windows Dependencies
+
+on:
+  workflow_dispatch:
+    inputs:
+      deps_tag:
+        description: GitHub release tag for the dependency bundle
+        required: true
+        default: deps-windows-msvc2022-x64-v1
+      bundle_name:
+        description: Dependency bundle asset name without extension
+        required: true
+        default: dicomviewer-windows-deps-msvc2022-x64-v1
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: Build and publish Windows dependency bundle
+    runs-on: windows-2022
+
+    env:
+      VCPKG_ROOT: C:\vcpkg
+      VCPKG_DEFAULT_TRIPLET: x64-windows
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Locate vcpkg
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "$env:VCPKG_ROOT\vcpkg.exe")) {
+            throw "vcpkg.exe not found at $env:VCPKG_ROOT"
+          }
+
+          & "$env:VCPKG_ROOT\vcpkg.exe" version
+
+      - name: Restore vcpkg cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\vcpkg\installed
+            C:\vcpkg\downloads
+          key: windows-vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            windows-vcpkg-${{ runner.os }}-
+
+      - name: Install dependency stack
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_ROOT\vcpkg.exe" install `
+            --triplet x64-windows `
+            --clean-after-build
+
+      - name: Create dependency manifest
+        shell: pwsh
+        run: |
+          $bundleName = "${{ inputs.bundle_name }}"
+          $stage = Join-Path $env:RUNNER_TEMP $bundleName
+          $manifest = Join-Path $stage "manifest"
+
+          New-Item -ItemType Directory -Force -Path $manifest | Out-Null
+
+          & "$env:VCPKG_ROOT\vcpkg.exe" list | Out-File -FilePath (Join-Path $manifest "vcpkg-list.txt") -Encoding utf8
+          & "$env:VCPKG_ROOT\vcpkg.exe" version | Out-File -FilePath (Join-Path $manifest "vcpkg-version.txt") -Encoding utf8
+          git -C "$env:VCPKG_ROOT" rev-parse HEAD | Out-File -FilePath (Join-Path $manifest "vcpkg-commit.txt") -Encoding utf8
+
+          Copy-Item -Path "vcpkg.json" -Destination (Join-Path $manifest "vcpkg.json")
+
+          @(
+            "DicomViewer Windows dependency bundle",
+            "",
+            "Bundle: $bundleName",
+            "Triplet: x64-windows",
+            "Compiler/runtime: MSVC 2022 x64",
+            "Contents: Qt6, VTK with Qt/OpenGL, GDCM, Qt SQLite SQL support",
+            "",
+            "This is a dependency/toolchain artifact, not a DicomViewer software release."
+          ) | Out-File -FilePath (Join-Path $manifest "README.txt") -Encoding utf8
+
+      - name: Stage installed dependencies
+        shell: pwsh
+        run: |
+          $bundleName = "${{ inputs.bundle_name }}"
+          $stage = Join-Path $env:RUNNER_TEMP $bundleName
+          $source = Join-Path $env:VCPKG_ROOT "installed\x64-windows"
+          $destination = Join-Path $stage "installed\x64-windows"
+
+          if (-not (Test-Path $source)) {
+            throw "Expected dependency install path does not exist: $source"
+          }
+
+          New-Item -ItemType Directory -Force -Path $destination | Out-Null
+          robocopy $source $destination /MIR
+          if ($LASTEXITCODE -gt 7) {
+            exit $LASTEXITCODE
+          }
+          $global:LASTEXITCODE = 0
+
+      - name: Package dependency bundle
+        shell: pwsh
+        run: |
+          $bundleName = "${{ inputs.bundle_name }}"
+          $stage = Join-Path $env:RUNNER_TEMP $bundleName
+          $zipPath = Join-Path $env:RUNNER_TEMP "$bundleName.zip"
+          $shaPath = Join-Path $env:RUNNER_TEMP "$bundleName.zip.sha256"
+
+          if (Test-Path $zipPath) {
+            Remove-Item $zipPath -Force
+          }
+
+          Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $zipPath -CompressionLevel Optimal
+
+          $hash = Get-FileHash $zipPath -Algorithm SHA256
+          "$($hash.Hash)  $bundleName.zip" | Out-File -FilePath $shaPath -Encoding ascii
+
+          $zipSize = (Get-Item $zipPath).Length
+          $maxReleaseAssetSize = 2GB
+          if ($zipSize -ge $maxReleaseAssetSize) {
+            throw "Dependency bundle is $zipSize bytes, which exceeds GitHub's per-release-asset limit. Reduce the bundle or split it before publishing."
+          }
+
+          "WINDOWS_DEPS_ZIP=$zipPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "WINDOWS_DEPS_SHA=$shaPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.bundle_name }}
+          path: |
+            ${{ runner.temp }}\${{ inputs.bundle_name }}.zip
+            ${{ runner.temp }}\${{ inputs.bundle_name }}.zip.sha256
+          if-no-files-found: error
+
+      - name: Publish GitHub release asset
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ inputs.deps_tag }}"
+          $bundleName = "${{ inputs.bundle_name }}"
+          $notesPath = Join-Path $env:RUNNER_TEMP "$bundleName-release-notes.md"
+
+          @(
+            "# Windows Dependency Bundle",
+            "",
+            "This release stores the reusable Windows dependency bundle for DicomViewer CI.",
+            "",
+            "- Bundle: `$bundleName.zip`",
+            "- Triplet: `x64-windows`",
+            "- Compiler/runtime: `MSVC 2022 x64`",
+            "- Contents: Qt6, VTK with Qt/OpenGL, GDCM, Qt SQLite SQL support",
+            "",
+            "This is not a DicomViewer application release."
+          ) | Out-File -FilePath $notesPath -Encoding utf8
+
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag `
+              --title "Windows dependency bundle $bundleName" `
+              --notes-file $notesPath
+          }
+
+          gh release upload $tag `
+            "$env:WINDOWS_DEPS_ZIP" `
+            "$env:WINDOWS_DEPS_SHA" `
+            --clobber

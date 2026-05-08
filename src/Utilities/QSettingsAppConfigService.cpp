@@ -6,6 +6,7 @@
 #include <QFileInfo>
 #include <QProcessEnvironment>
 #include <QSettings>
+#include <QStandardPaths>
 
 namespace
 {
@@ -70,11 +71,8 @@ QSettingsAppConfigService::QSettingsAppConfigService()
 DatabaseSettings QSettingsAppConfigService::loadDatabaseSettings() const
 {
     DatabaseSettings databaseSettings;
-    databaseSettings.setHostName(readValue("database", "hostName", "127.0.0.1").toString());
-    databaseSettings.setPort(readValue("database", "port", 5432).toInt());
-    databaseSettings.setDatabaseName(readValue("database", "databaseName").toString());
-    databaseSettings.setUserName(readValue("database", "userName").toString());
-    databaseSettings.setPassword(readValue("database", "password").toString());
+    const QString configuredFilePath = readValue("database", "filePath").toString().trimmed();
+    databaseSettings.setFilePath(configuredFilePath.isEmpty() ? defaultDatabaseFilePath() : configuredFilePath);
     return databaseSettings;
 }
 
@@ -178,6 +176,17 @@ bool QSettingsAppConfigService::saveAiApiKey(const QString& apiKey, QString* err
 QString QSettingsAppConfigService::configFilePath() const
 {
     return m_configFilePath;
+}
+
+QString QSettingsAppConfigService::defaultDatabaseFilePath() const
+{
+    QString appDataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    if (appDataPath.trimmed().isEmpty())
+    {
+        appDataPath = QDir(QCoreApplication::applicationDirPath()).filePath("data");
+    }
+
+    return QDir(appDataPath).filePath("dicomviewer.sqlite");
 }
 
 QVariant QSettingsAppConfigService::readValue(const QString& group, const QString& key, const QVariant& defaultValue) const

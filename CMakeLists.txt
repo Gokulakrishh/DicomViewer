@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.21)
 
-set(DICOMVIEWER_PRODUCT_NAME "DicomViewer" CACHE STRING "Internal product name")
-set(DICOMVIEWER_DISPLAY_NAME "DicomViewer" CACHE STRING "User-facing product name")
-set(DICOMVIEWER_BUNDLE_IDENTIFIER "com.dicomviewer.app" CACHE STRING "macOS bundle identifier")
+set(DICOMVIEWER_PRODUCT_NAME "CrossAxialDicomViewer" CACHE STRING "Internal product name")
+set(DICOMVIEWER_DISPLAY_NAME "Cross Axial Dicom Viewer" CACHE STRING "User-facing product name")
+set(DICOMVIEWER_BUNDLE_IDENTIFIER "com.crossaxialdicomviewer.app" CACHE STRING "macOS bundle identifier")
 set(DICOMVIEWER_VERSION_MAJOR "1" CACHE STRING "Major version")
 set(DICOMVIEWER_VERSION_MINOR "0" CACHE STRING "Minor version")
 set(DICOMVIEWER_VERSION_RELEASE "0" CACHE STRING "Release/Patch version")
@@ -15,9 +15,11 @@ set(DICOMVIEWER_VERSION_STRING
 
 project(${DICOMVIEWER_PRODUCT_NAME}
     VERSION ${DICOMVIEWER_VERSION_SHORT}
-    DESCRIPTION "Dicom Image Viewer (2D/3D)"
+    DESCRIPTION "Cross Axial DICOM Viewer (2D/3D)"
     LANGUAGES C CXX
 )
+
+include(CTest)
 
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "Product: ${DICOMVIEWER_DISPLAY_NAME}")
@@ -261,6 +263,7 @@ set(SRC_FILES
     src/AdvancedViewer/WidgetsAdvancedViewerLauncher.cpp
     src/Errors/QtErrorDialogPresenter.cpp
     src/Utilities/AppStyle.cpp
+    src/Utilities/AppIcons.cpp
     src/Utilities/AppDialogBase.cpp
     src/Utilities/AiApiKeyDialog.cpp
     src/Utilities/MemoryManagementDebug.cpp
@@ -268,11 +271,18 @@ set(SRC_FILES
     src/Utilities/QSettingsAppConfigService.cpp
     src/Utilities/WarningDialog.cpp
     src/FileHandling/GDCMFileHandling.cpp
+    src/DicomViewerWindow/DicomPreviewPanel.cpp
+    src/DicomViewerWindow/AnnotationReportDock.cpp
+    src/DicomViewerWindow/AnnotationSliceBrowserPanel.cpp
+    src/DicomViewerWindow/CurrentSliceAnnotationPanel.cpp
+    src/DicomViewerWindow/RegulatorySplashDialog.cpp
     src/DicomViewerWindow/DicomMainWindow.cpp
     src/DicomViewerWindow/DicomTreeController.cpp
     src/DicomViewerWindow/DicomTreePanel.cpp
     src/DicomViewerWindow/DicomMainWindow.ui
     src/Model/DicomImage.cpp
+    src/Services/AnnotationReportService.cpp
+    src/Services/CineFrameCache.cpp
     src/Services/MeasurementAnnotationStore.cpp
     src/DicomViewerWindow/DicomViewportController.cpp
     src/DicomViewerWindow/ViewportSession.cpp
@@ -280,8 +290,8 @@ set(SRC_FILES
     src/Services/VolumeBuilder.cpp
     src/Services/VolumeResampleService.cpp
     src/Utilities/WarningDialogService.cpp
-    src/Database/PostgreConnection.cpp
-    src/Database/PostgreService.cpp
+    src/Database/SqliteConnection.cpp
+    src/Database/SqliteService.cpp
     ${APP_3D_MODEL_SOURCES}
     ${APP_3D_SERVICE_SOURCES}
     ${APP_QML3D_SOURCES}
@@ -314,6 +324,7 @@ set(HEADER_FILES
     src/Errors/QtErrorDialogPresenter.h
     src/Utilities/AiServiceSettings.h
     src/Utilities/AppStyle.h
+    src/Utilities/AppIcons.h
     src/Utilities/AppDialogBase.h
     src/Utilities/AiApiKeyDialog.h
     src/Utilities/AiMessageFormatter.h
@@ -329,6 +340,8 @@ set(HEADER_FILES
     src/ViewerOverlays/CrosshairOverlayWidget.h
     src/ViewerTools/WindowLevelPreset.h
     src/Model/MedicalImage.h
+    src/Model/AnnotationReportSummary.h
+    src/Model/DicomPreviewItem.h
     src/Model/DicomMetadata.h
     src/Model/DicomImage.h
     src/Model/MeasurementAnnotationRecord.h
@@ -339,6 +352,12 @@ set(HEADER_FILES
     src/Model/VolumeData.h
     src/FileHandling/FileHandling.h
     src/FileHandling/GDCMFileHandling.h
+    src/DicomViewerWindow/DicomPreviewPanel.h
+    src/DicomViewerWindow/AnnotationReportDock.h
+    src/DicomViewerWindow/AnnotationSliceBrowserPanel.h
+    src/DicomViewerWindow/AnnotationUiOptions.h
+    src/DicomViewerWindow/CurrentSliceAnnotationPanel.h
+    src/DicomViewerWindow/RegulatorySplashDialog.h
     src/DicomViewerWindow/DicomMainWindow.h
     src/DicomViewerWindow/DicomTreeController.h
     src/DicomViewerWindow/DicomTreeItemRoles.h
@@ -346,15 +365,18 @@ set(HEADER_FILES
     src/DicomViewerWindow/DicomViewportController.h
     src/DicomViewerWindow/ViewportSession.h
     src/Services/AdvancedSeriesVolumeService.h
+    src/Services/AnnotationReportService.h
+    src/Services/CineFrameCache.h
+    src/Services/IAnnotationReportService.h
     src/Services/VolumeBuilder.h
     src/Services/MeasurementAnnotationStore.h
     src/Services/VolumeResampleService.h
     src/Utilities/WarningDialog.h
     src/Utilities/WarningDialogService.h
     src/Database/DatabaseConnection.h
-    src/Database/PostgreConnection.h
+    src/Database/SqliteConnection.h
     src/Database/DatabaseService.h
-    src/Database/PostgreService.h
+    src/Database/SqliteService.h
     ${APP_3D_MODEL_HEADERS}
     ${APP_3D_SERVICE_HEADERS}
     ${APP_QML3D_HEADERS}
@@ -376,6 +398,7 @@ add_executable(${PROJECT_NAME}
 target_include_directories(${PROJECT_NAME} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${DICOMVIEWER_GENERATED_DIR}
+        ${GDCM_INCLUDE_DIRS}
         /usr/include/gdcm-3.0
 )
 
@@ -441,18 +464,19 @@ if (WIN32)
 endif()
 
 if (APPLE)
+    set(DICOMVIEWER_MACOS_ICON "${CMAKE_CURRENT_SOURCE_DIR}/src/resources/icons/icon.icns")
+    set_source_files_properties("${DICOMVIEWER_MACOS_ICON}" PROPERTIES
+        MACOSX_PACKAGE_LOCATION "Resources"
+    )
+    target_sources(${PROJECT_NAME} PRIVATE "${DICOMVIEWER_MACOS_ICON}")
+
     set_target_properties(${PROJECT_NAME} PROPERTIES
         MACOSX_BUNDLE ON
         MACOSX_BUNDLE_BUNDLE_NAME "${DICOMVIEWER_DISPLAY_NAME}"
         MACOSX_BUNDLE_GUI_IDENTIFIER "${DICOMVIEWER_BUNDLE_IDENTIFIER}"
+        MACOSX_BUNDLE_ICON_FILE "icon.icns"
         MACOSX_BUNDLE_BUNDLE_VERSION "${DICOMVIEWER_VERSION_STRING}"
         MACOSX_BUNDLE_SHORT_VERSION_STRING "${DICOMVIEWER_VERSION_SHORT}"
-    )
-
-    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${CMAKE_CURRENT_SOURCE_DIR}/config.ini
-            $<TARGET_BUNDLE_CONTENT_DIR:${PROJECT_NAME}>/MacOS/config.ini
     )
 endif()
 
@@ -478,6 +502,7 @@ add_executable(ThreeDPipelineHarness
 
 target_include_directories(ThreeDPipelineHarness PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${GDCM_INCLUDE_DIRS}
     /usr/include/gdcm-3.0
 )
 
@@ -504,6 +529,7 @@ add_executable(ThreeDSeriesCli
 
 target_include_directories(ThreeDSeriesCli PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${GDCM_INCLUDE_DIRS}
     /usr/include/gdcm-3.0
 )
 
@@ -518,3 +544,38 @@ target_link_libraries(ThreeDSeriesCli
         gdcmIOD
         gdcmDSED
 )
+
+add_executable(SqliteServiceSmokeTest
+    tests/SqliteServiceSmokeTest.cpp
+    src/Services/AnnotationReportService.cpp
+    src/Database/SqliteConnection.cpp
+    src/Database/SqliteService.cpp
+    src/Model/DicomImage.cpp
+    src/Database/DatabaseService.h
+    src/Database/SqliteConnection.h
+    src/Database/SqliteService.h
+    src/Model/DicomImage.h
+    src/Model/DicomParameters.h
+    src/Model/MeasurementAnnotationRecord.h
+    src/Model/AnnotationReportSummary.h
+    src/Services/AnnotationReportService.h
+    src/Services/IAnnotationReportService.h
+)
+
+target_include_directories(SqliteServiceSmokeTest PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(SqliteServiceSmokeTest
+    PRIVATE
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Sql
+)
+
+if(BUILD_TESTING)
+    add_test(NAME SqliteServiceSmokeTest COMMAND SqliteServiceSmokeTest)
+    set_tests_properties(SqliteServiceSmokeTest PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    )
+endif()

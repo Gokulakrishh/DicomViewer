@@ -19,11 +19,19 @@ class VtkSliceMprPaneView;
 class VtkThreeDReferencePaneView;
 class vtkImageData;
 
+/**
+ * @brief QWidget MPR view containing three orthogonal slice panes and reference pane.
+ *
+ * Responsibilities:
+ * - Coordinate MPR scene, controllers, tools, overlays, and VTK panes.
+ * - Keep crosshair and measurement coordinates correct under zoom and pan.
+ */
 class VtkMprView : public QWidget, public IMeasurementToolHost
 {
     Q_OBJECT
 
 public:
+    /** @brief Creates an MPR view from diagnostic volume data. */
     explicit VtkMprView(
         std::shared_ptr<IVolumeData> volume,
         int initialWindowLevel,
@@ -31,11 +39,17 @@ public:
         QWidget* parent = nullptr);
     ~VtkMprView() override;
 
+    /** @brief Sets the active MPR interaction tool. */
     void setActiveTool(MprToolType toolType);
+    /** @brief Sets context text displayed in panes. */
     void setContextText(const QString& text);
+    /** @brief Sets WL/WW values. */
     void setWindowLevelWidth(int level, int width);
+    /** @brief Returns current window level. */
     [[nodiscard]] int currentWindowLevel() const;
+    /** @brief Returns current window width. */
     [[nodiscard]] int currentWindowWidth() const;
+    /** @brief Returns active MPR tool. */
     [[nodiscard]] MprToolType activeTool() const;
 
 signals:

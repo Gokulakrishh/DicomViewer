@@ -3,6 +3,9 @@
 #include <QString>
 #include <array>
 
+/**
+ * @brief Built-in WL/WW preset definition.
+ */
 struct WindowLevelPreset
 {
     const char* name;
@@ -10,6 +13,9 @@ struct WindowLevelPreset
     int width;
 };
 
+/**
+ * @brief Identifier for built-in window-level presets.
+ */
 enum class BuiltInWindowLevelPresetId
 {
     Brain,
@@ -37,11 +43,21 @@ inline constexpr std::array<BuiltInWindowLevelPresetId, 4> kBuiltInWindowLevelPr
     BuiltInWindowLevelPresetId::Lung,
 }};
 
+/**
+ * @brief Returns the display label for a preset.
+ * @param preset Preset to label.
+ * @return User-visible preset name.
+ */
 inline QString windowLevelPresetLabel(const WindowLevelPreset& preset)
 {
     return QString::fromLatin1(preset.name);
 }
 
+/**
+ * @brief Resolves a built-in preset by id.
+ * @param presetId Built-in preset id.
+ * @return Preset definition.
+ */
 inline constexpr WindowLevelPreset windowLevelPreset(BuiltInWindowLevelPresetId presetId)
 {
     switch (presetId)

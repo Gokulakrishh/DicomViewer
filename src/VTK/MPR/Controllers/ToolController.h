@@ -12,9 +12,13 @@ class MeasurementService;
 class IMeasurementToolHost;
 struct ViewerInputEvent;
 
+/**
+ * @brief Owns and dispatches reusable tools for the MPR viewer.
+ */
 class ToolController
 {
 public:
+    /** @brief Creates the MPR tool controller. */
     ToolController(
         MprScene& scene,
         MprController& controller,
@@ -22,10 +26,15 @@ public:
         IMeasurementToolHost& measurementToolHost,
         IViewerToolTarget& toolTarget);
 
+    /** @brief Returns the active MPR tool type. */
     [[nodiscard]] MprToolType activeTool() const;
+    /** @brief Sets the active MPR tool type. */
     void setActiveTool(MprToolType toolType);
+    /** @brief Begins active tool interaction. */
     void beginInteraction(const ViewerInputEvent& event);
+    /** @brief Updates active tool interaction. */
     void updateInteraction(const ViewerInputEvent& event);
+    /** @brief Ends active tool interaction. */
     void endInteraction(const ViewerInputEvent& event);
 
 private:

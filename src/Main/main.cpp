@@ -2,7 +2,9 @@
 
 #include "AdvancedViewer/WidgetsAdvancedViewerLauncher.h"
 #include "DicomViewerWindow/DicomMainWindow.h"
+#include "DicomViewerWindow/RegulatorySplashDialog.h"
 #include "AppVersion.h"
+#include "Utilities/AppIcons.h"
 #include "Utilities/AppStyle.h"
 #include "Utilities/QSettingsAppConfigService.h"
 #include "Utilities/WarningDialogService.h"
@@ -23,7 +25,13 @@ int main(int argc, char* argv[])
     app.setApplicationName(QString::fromUtf8(AppVersion::kProductName));
     app.setApplicationDisplayName(QString::fromUtf8(AppVersion::kDisplayName));
     app.setApplicationVersion(QString::fromUtf8(AppVersion::kVersionString));
+    app.setWindowIcon(AppIcons::applicationIcon());
     AppStyle::apply(app);
+
+    RegulatorySplashDialog splash;
+    if (splash.exec() != QDialog::Accepted) {
+        return 0;
+    }
 
     DicomMainWindow dicom(
         std::make_unique<QSettingsAppConfigService>(),

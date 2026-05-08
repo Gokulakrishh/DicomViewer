@@ -1,0 +1,117 @@
+name: Windows CI
+
+on:
+  workflow_dispatch:
+    inputs:
+      deps_tag:
+        description: GitHub release tag containing the Windows dependency bundle
+        required: true
+        default: deps-windows-msvc2022-x64-v1
+      bundle_name:
+        description: Dependency bundle asset name without extension
+        required: true
+        default: dicomviewer-windows-deps-msvc2022-x64-v1
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build with Windows dependency bundle
+    runs-on: windows-2022
+
+    env:
+      VCPKG_ROOT: C:\vcpkg
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download dependency bundle
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $downloadDir = Join-Path $env:RUNNER_TEMP "windows-deps-download"
+          New-Item -ItemType Directory -Force -Path $downloadDir | Out-Null
+
+          gh release download "${{ inputs.deps_tag }}" `
+            --pattern "${{ inputs.bundle_name }}.zip" `
+            --pattern "${{ inputs.bundle_name }}.zip.sha256" `
+            --dir $downloadDir
+
+          "WINDOWS_DEPS_DOWNLOAD=$downloadDir" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Verify dependency checksum
+        shell: pwsh
+        run: |
+          $bundleName = "${{ inputs.bundle_name }}"
+          $zipPath = Join-Path $env:WINDOWS_DEPS_DOWNLOAD "$bundleName.zip"
+          $shaPath = Join-Path $env:WINDOWS_DEPS_DOWNLOAD "$bundleName.zip.sha256"
+
+          if (-not (Test-Path $zipPath)) {
+            throw "Dependency bundle missing: $zipPath"
+          }
+          if (-not (Test-Path $shaPath)) {
+            throw "Dependency checksum missing: $shaPath"
+          }
+
+          $expected = (Get-Content $shaPath).Split(" ", [System.StringSplitOptions]::RemoveEmptyEntries)[0].ToUpperInvariant()
+          $actual = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToUpperInvariant()
+
+          if ($expected -ne $actual) {
+            throw "Dependency checksum mismatch. Expected $expected but got $actual"
+          }
+
+      - name: Extract dependency bundle
+        shell: pwsh
+        run: |
+          $bundleName = "${{ inputs.bundle_name }}"
+          $zipPath = Join-Path $env:WINDOWS_DEPS_DOWNLOAD "$bundleName.zip"
+
+          Expand-Archive -Path $zipPath -DestinationPath $env:VCPKG_ROOT -Force
+
+          $prefix = Join-Path $env:VCPKG_ROOT "installed\x64-windows"
+          if (-not (Test-Path $prefix)) {
+            throw "Extracted dependency prefix missing: $prefix"
+          }
+
+          "DICOMVIEWER_WINDOWS_DEPS_PREFIX=$prefix" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Inspect dependency configs
+        shell: pwsh
+        run: |
+          $prefix = $env:DICOMVIEWER_WINDOWS_DEPS_PREFIX
+
+          Write-Host "Dependency prefix: $prefix"
+          Get-ChildItem -Path $prefix -Recurse -Filter Qt6Config.cmake -ErrorAction SilentlyContinue | Select-Object -First 10 | ForEach-Object { $_.FullName }
+          Get-ChildItem -Path $prefix -Recurse -Filter VTKConfig.cmake -ErrorAction SilentlyContinue | Select-Object -First 10 | ForEach-Object { $_.FullName }
+          Get-ChildItem -Path $prefix -Recurse -Filter vtk-config.cmake -ErrorAction SilentlyContinue | Select-Object -First 10 | ForEach-Object { $_.FullName }
+          Get-ChildItem -Path $prefix -Recurse -Filter GDCMConfig.cmake -ErrorAction SilentlyContinue | Select-Object -First 10 | ForEach-Object { $_.FullName }
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          cmake -S . -B build-windows `
+            -G "Visual Studio 17 2022" `
+            -A x64 `
+            -DCMAKE_PREFIX_PATH="$env:DICOMVIEWER_WINDOWS_DEPS_PREFIX" `
+            -DDICOMVIEWER_ENABLE_VTK=ON
+
+      - name: Build
+        shell: pwsh
+        run: |
+          cmake --build build-windows --config Release --parallel 2
+
+      - name: Test
+        shell: pwsh
+        run: |
+          ctest --test-dir build-windows -C Release --output-on-failure
+
+      - name: Upload Windows build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: DicomViewer-windows-ci-build-output
+          path: |
+            build-windows/Release/**
+          if-no-files-found: error

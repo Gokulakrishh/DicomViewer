@@ -1,6 +1,19 @@
 <RCC>
     <qresource prefix="/">
         <file alias="styles/app.qss">styles/app.qss</file>
+        <file alias="icons/logo_16.png">icons/logo_16.png</file>
+        <file alias="icons/logo_32.png">icons/logo_32.png</file>
+        <file alias="icons/logo_64.png">icons/logo_64.png</file>
+        <file alias="icons/logo_128.png">icons/logo_128.png</file>
+        <file alias="icons/logo_256.png">icons/logo_256.png</file>
+        <file alias="icons/logo_512.png">icons/logo_512.png</file>
+        <file alias="icons/icon.png">icons/icon.png</file>
+        <file alias="icons/icon_16.png">icons/icon_16.png</file>
+        <file alias="icons/icon_32.png">icons/icon_32.png</file>
+        <file alias="icons/icon_64.png">icons/icon_64.png</file>
+        <file alias="icons/icon_128.png">icons/icon_128.png</file>
+        <file alias="icons/icon_256.png">icons/icon_256.png</file>
+        <file alias="icons/icon_512.png">icons/icon_512.png</file>
         <file alias="icons/cine_play.svg">icons/cine_play.svg</file>
         <file alias="icons/cine_pause.svg">icons/cine_pause.svg</file>
         <file alias="qml/ThreeDViewer.qml">qml/ThreeDViewer.qml</file>

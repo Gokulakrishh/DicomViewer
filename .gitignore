@@ -22,6 +22,15 @@ build/
 build-*/
 cmake-build-*/
 
+# Internal Tools
+tools/
+
+# Local runtime data
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+
 # Mistaken SSH key filenames
  eval "$(ssh-agent -s)"
  eval "$(ssh-agent -s)".pub

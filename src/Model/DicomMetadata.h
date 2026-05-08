@@ -5,6 +5,12 @@
 #include <memory>
 #include <vector>
 
+/**
+ * @brief DICOM VOI window preset extracted from an image instance.
+ *
+ * Presets are stored separately from built-in viewer presets so DICOM-provided
+ * WL/WW options can be presented consistently across main and MPR views.
+ */
 struct DicomWindowPreset
 {
     double center{0.0};
@@ -12,6 +18,12 @@ struct DicomWindowPreset
     QString explanation;
 };
 
+/**
+ * @brief Patient-level DICOM metadata shared by studies.
+ *
+ * The structure is reference-shared by lower hierarchy levels to avoid copying
+ * duplicate patient text into every image instance.
+ */
 struct DicomPatientMetadata
 {
     QString patientId;
@@ -20,6 +32,13 @@ struct DicomPatientMetadata
     QString patientBirthDate;
 };
 
+/**
+ * @brief Study-level DICOM metadata shared by series.
+ *
+ * Responsibilities:
+ * - Hold study identifiers and acquisition context.
+ * - Reference patient metadata without duplicating it.
+ */
 struct DicomStudyMetadata
 {
     std::shared_ptr<const DicomPatientMetadata> patient;
@@ -32,6 +51,13 @@ struct DicomStudyMetadata
     QString referringPhysicianName;
 };
 
+/**
+ * @brief Series-level DICOM metadata shared by instances.
+ *
+ * Responsibilities:
+ * - Hold series identifiers, modality, protocol, and equipment details.
+ * - Reference study metadata without duplicating it for every slice.
+ */
 struct DicomSeriesMetadata
 {
     std::shared_ptr<const DicomStudyMetadata> study;
@@ -51,6 +77,17 @@ struct DicomSeriesMetadata
     QString stationName;
 };
 
+/**
+ * @brief SOP instance-level DICOM metadata needed by viewer workflows.
+ *
+ * Responsibilities:
+ * - Store image geometry, pixel calibration, rescale, and window presets.
+ * - Link to series/study/patient metadata through shared immutable references.
+ *
+ * Assumptions:
+ * - This structure stores standardized metadata used by the application, not a
+ *   complete copy of every DICOM tag.
+ */
 struct DicomInstanceMetadata
 {
     std::shared_ptr<const DicomSeriesMetadata> series;
@@ -66,6 +103,11 @@ struct DicomInstanceMetadata
     int rows{0};
     int columns{0};
     int samplesPerPixel{0};
+    int numberOfFrames{1};
+    double frameTimeMs{0.0};
+    double cineRateFps{0.0};
+    double frameIntervalMs{100.0};
+    std::vector<double> frameTimeVectorMs;
     int bitsAllocated{0};
     int bitsStored{0};
     int highBit{0};

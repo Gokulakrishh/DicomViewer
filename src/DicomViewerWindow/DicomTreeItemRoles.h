@@ -4,6 +4,12 @@
 
 namespace DicomTreeItemRoles
 {
+/**
+ * @brief Custom Qt item roles used by the DICOM study-browser model.
+ *
+ * Roles store stable DICOM identifiers and searchable metadata in tree rows
+ * without exposing model-column text parsing to controller code.
+ */
 enum Value
 {
     FilePath = Qt::UserRole + 1,

@@ -10,6 +10,7 @@
 #include <QImageReader>
 #include <QList>
 #include <QPixmap>
+#include <QSet>
 #include <QVector>
 #include <QtGlobal>
 #include <algorithm>
@@ -23,15 +24,11 @@
 
 GDCMFileHandling::GDCMFileHandling()
 {
-    for (const auto& format : QImageReader::supportedImageFormats())
-    {
-        m_supportedFormats << ("*." + QString::fromLatin1(format));
-    }
-
-    if (!m_supportedFormats.contains("*.dcm", Qt::CaseInsensitive))
-    {
-        m_supportedFormats << "*.dcm";
-    }
+    m_supportedFormats
+        << "*.dcm"
+        << "*.dicom"
+        << "*.ima"
+        << "*.img";
 }
 
 FileHandling::PatientList GDCMFileHandling::loadDicomFolder(const QString& folderPath, ProgressCallback progressCallback)
@@ -121,7 +118,7 @@ std::unique_ptr<MedicalImage> GDCMFileHandling::loadImage(const QString& filePat
     return loadDicomImage(filePath, reader, false);
 }
 
-std::unique_ptr<DicomImage> GDCMFileHandling::loadImageData(const QString& filePath) const
+std::unique_ptr<DicomImage> GDCMFileHandling::loadImageData(const QString& filePath, int frameIndex) const
 {
     gdcm::ImageReader reader;
     reader.SetFileName(filePath.toStdString().c_str());
@@ -132,7 +129,56 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadImageData(const QString& fileP
         return nullptr;
     }
 
-    return loadDicomImage(filePath, reader, false);
+    return loadDicomImage(filePath, reader, false, frameIndex);
+}
+
+QHash<int, std::shared_ptr<DicomImage>> GDCMFileHandling::loadImageDataFrames(
+    const QString& filePath,
+    const QList<int>& frameIndices) const
+{
+    QHash<int, std::shared_ptr<DicomImage>> frames;
+    if (frameIndices.isEmpty())
+    {
+        return frames;
+    }
+
+    gdcm::ImageReader reader;
+    reader.SetFileName(filePath.toStdString().c_str());
+    if (!reader.Read())
+    {
+        qDebug() << "Failed to read DICOM file:" << filePath;
+        return frames;
+    }
+
+    const gdcm::Image& gdcmImage = reader.GetImage();
+    QVector<char> decodedBuffer(static_cast<qsizetype>(gdcmImage.GetBufferLength()));
+    if (!gdcmImage.GetBuffer(decodedBuffer.data()))
+    {
+        qDebug() << "Failed to get pixel buffer for:" << filePath;
+        return frames;
+    }
+
+    QSet<int> uniqueFrameIndices;
+    for (int frameIndex : frameIndices)
+    {
+        uniqueFrameIndices.insert(std::max(0, frameIndex));
+    }
+
+    for (int frameIndex : uniqueFrameIndices)
+    {
+        std::unique_ptr<DicomImage> loadedImage = loadDicomImage(
+            filePath,
+            reader,
+            false,
+            frameIndex,
+            &decodedBuffer);
+        if (loadedImage)
+        {
+            frames.insert(frameIndex, std::shared_ptr<DicomImage>(loadedImage.release()));
+        }
+    }
+
+    return frames;
 }
 
 FileHandling::PatientPtr GDCMFileHandling::loadDicomHierarchy(const QString& filePath)
@@ -157,8 +203,20 @@ QStringList GDCMFileHandling::getSupportedFormats() const
 bool GDCMFileHandling::canLoad(const QString& filePath) const
 {
     const QFileInfo info(filePath);
+    if (!info.exists() || !info.isFile() || !info.isReadable())
+    {
+        return false;
+    }
+
     const QString suffix = "*." + info.suffix();
-    return m_supportedFormats.contains(suffix, Qt::CaseInsensitive);
+    if (!info.suffix().isEmpty() && !m_supportedFormats.contains(suffix, Qt::CaseInsensitive))
+    {
+        return false;
+    }
+
+    gdcm::ImageReader reader;
+    reader.SetFileName(filePath.toStdString().c_str());
+    return reader.Read();
 }
 
 void GDCMFileHandling::mergePatientHierarchy(const PatientPtr& sourcePatient, Patient& targetPatient) const
@@ -246,6 +304,8 @@ void GDCMFileHandling::mergePatientHierarchy(const PatientPtr& sourcePatient, Pa
                 copiedImage->setSopInstanceUid(sourceImage->sopInstanceUid());
                 copiedImage->setInstanceNumber(sourceImage->instanceNumber());
                 copiedImage->setDimensions(sourceImage->width(), sourceImage->height());
+                copiedImage->setFrameCount(sourceImage->frameCount());
+                copiedImage->setFrameIndex(sourceImage->frameIndex());
                 if (sourceImage->hasPixelSpacing())
                 {
                     copiedImage->setPixelSpacing(sourceImage->pixelSpacingX(), sourceImage->pixelSpacingY());
@@ -292,7 +352,9 @@ QString GDCMFileHandling::readStringTag(const gdcm::StringFilter& stringFilter, 
 std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(
     const QString& filePath,
     const gdcm::ImageReader& reader,
-    bool renderPixmap) const
+    bool renderPixmap,
+    int frameIndex,
+    const QVector<char>* decodedBuffer) const
 {
     const gdcm::Image& gdcmImage = reader.GetImage();
     const unsigned int width = gdcmImage.GetDimensions()[0];
@@ -304,15 +366,34 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(
     const bool isMonochrome1 =
         gdcmImage.GetPhotometricInterpretation() == gdcm::PhotometricInterpretation::MONOCHROME1;
 
-    QVector<char> buffer(static_cast<qsizetype>(bufferLength));
-    if (!gdcmImage.GetBuffer(buffer.data()))
+    QVector<char> ownedBuffer;
+    const QVector<char>* buffer = decodedBuffer;
+    if (!buffer)
     {
-         qDebug() << "Failed to get pixel buffer for:" << filePath;
-        return nullptr;
+        ownedBuffer.resize(static_cast<qsizetype>(bufferLength));
+        if (!gdcmImage.GetBuffer(ownedBuffer.data()))
+        {
+             qDebug() << "Failed to get pixel buffer for:" << filePath;
+            return nullptr;
+        }
+        buffer = &ownedBuffer;
     }
 
     gdcm::StringFilter stringFilter;
     stringFilter.SetFile(reader.GetFile());
+    const int numberOfFrames = std::max(1, readStringTag(stringFilter, 0x0028, 0x0008).trimmed().toInt());
+    const int selectedFrameIndex = std::clamp(frameIndex, 0, numberOfFrames - 1);
+    const unsigned int bytesPerSample = bitsAllocated <= 8 ? 1U : 2U;
+    const qsizetype frameByteCount = static_cast<qsizetype>(width)
+        * static_cast<qsizetype>(height)
+        * static_cast<qsizetype>(std::max(1U, samplesPerPixel))
+        * static_cast<qsizetype>(bytesPerSample);
+    const qsizetype frameOffset = frameByteCount * selectedFrameIndex;
+    const char* frameData = buffer->constData();
+    if (frameByteCount > 0 && frameOffset >= 0 && frameOffset + frameByteCount <= buffer->size())
+    {
+        frameData = buffer->constData() + frameOffset;
+    }
 
     const auto readNumericTagValue = [this, &stringFilter](uint16_t group, uint16_t element, double fallbackValue) {
         const QString tagValue = readStringTag(stringFilter, group, element);
@@ -396,6 +477,21 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(
 
         return presets;
     };
+    const auto calculateFrameIntervalMs = [](double frameTimeMs, double cineRateFps, const std::vector<double>& frameTimeVectorMs) {
+        if (!frameTimeVectorMs.empty() && frameTimeVectorMs.front() > 0.0)
+        {
+            return frameTimeVectorMs.front();
+        }
+        if (frameTimeMs > 0.0)
+        {
+            return frameTimeMs;
+        }
+        if (cineRateFps > 0.0)
+        {
+            return 1000.0 / cineRateFps;
+        }
+        return 100.0;
+    };
     const auto readPixelSpacingValues = [this, &stringFilter]() {
         const QString tagValue = readStringTag(stringFilter, 0x0028, 0x0030);
         const QStringList components = tagValue.split('\\', Qt::SkipEmptyParts);
@@ -463,12 +559,25 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(
     int defaultWindowWidth = 255;
     const auto [hasRescaleSlope, rescaleSlope] = readOptionalNumericTagValue(0x0028, 0x1053);
     const auto [hasRescaleIntercept, rescaleIntercept] = readOptionalNumericTagValue(0x0028, 0x1052);
+    const auto [hasFrameTime, frameTimeMs] = readOptionalNumericTagValue(0x0018, 0x1063);
+    const auto [hasCineRate, cineRateFps] = readOptionalNumericTagValue(0x0018, 0x0040);
+    std::vector<double> frameTimeVectorMs = readNumericComponents(0x0018, 0x1065);
+    frameTimeVectorMs.erase(
+        std::remove_if(
+            frameTimeVectorMs.begin(),
+            frameTimeVectorMs.end(),
+            [](double value) { return value <= 0.0; }),
+        frameTimeVectorMs.end());
+    const double frameIntervalMs = calculateFrameIntervalMs(
+        hasFrameTime ? frameTimeMs : 0.0,
+        hasCineRate ? cineRateFps : 0.0,
+        frameTimeVectorMs);
     const double appliedRescaleSlope = hasRescaleSlope ? rescaleSlope : 1.0;
     const double appliedRescaleIntercept = hasRescaleIntercept ? rescaleIntercept : 0.0;
     if (samplesPerPixel == 3 && bitsAllocated <= 8)
     {
         image = QImage(
-                    reinterpret_cast<const uchar*>(buffer.constData()),
+                    reinterpret_cast<const uchar*>(frameData),
                     static_cast<int>(width),
                     static_cast<int>(height),
                     static_cast<int>(width) * 3,
@@ -480,7 +589,7 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(
     {
         isMonochromeImage = true;
         image = QImage(
-                    reinterpret_cast<const uchar*>(buffer.constData()),
+                    reinterpret_cast<const uchar*>(frameData),
                     static_cast<int>(width),
                     static_cast<int>(height),
                     static_cast<int>(width),
@@ -491,7 +600,7 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(
         rawPixels.resize(static_cast<std::size_t>(pixelCount));
         minimumStoredValue = std::numeric_limits<int>::max();
         maximumStoredValue = std::numeric_limits<int>::min();
-        const auto* pixelData = reinterpret_cast<const uint8_t*>(buffer.constData());
+        const auto* pixelData = reinterpret_cast<const uint8_t*>(frameData);
         for (int index = 0; index < pixelCount; ++index)
         {
             const int value = static_cast<int>(pixelData[index]);
@@ -511,7 +620,7 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(
         rawPixels.resize(static_cast<std::size_t>(pixelCount));
         if (isSignedPixelData)
         {
-            const auto* pixelData = reinterpret_cast<const int16_t*>(buffer.constData());
+            const auto* pixelData = reinterpret_cast<const int16_t*>(frameData);
             for (int index = 0; index < pixelCount; ++index)
             {
                 const int value = static_cast<int>(std::lround((static_cast<double>(pixelData[index]) * appliedRescaleSlope) + appliedRescaleIntercept));
@@ -523,7 +632,7 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(
         }
         else
         {
-            const auto* pixelData = reinterpret_cast<const uint16_t*>(buffer.constData());
+            const auto* pixelData = reinterpret_cast<const uint16_t*>(frameData);
             for (int index = 0; index < pixelCount; ++index)
             {
                 const int value = static_cast<int>(std::lround((static_cast<double>(pixelData[index]) * appliedRescaleSlope) + appliedRescaleIntercept));
@@ -600,6 +709,11 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(
     metadata->rows = static_cast<int>(height);
     metadata->columns = static_cast<int>(width);
     metadata->samplesPerPixel = static_cast<int>(samplesPerPixel);
+    metadata->numberOfFrames = numberOfFrames;
+    metadata->frameTimeMs = hasFrameTime && frameTimeMs > 0.0 ? frameTimeMs : 0.0;
+    metadata->cineRateFps = hasCineRate && cineRateFps > 0.0 ? cineRateFps : 0.0;
+    metadata->frameIntervalMs = frameIntervalMs;
+    metadata->frameTimeVectorMs = frameTimeVectorMs;
     metadata->bitsAllocated = static_cast<int>(bitsAllocated);
     metadata->bitsStored = static_cast<int>(gdcmImage.GetPixelFormat().GetBitsStored());
     metadata->highBit = static_cast<int>(gdcmImage.GetPixelFormat().GetHighBit());
@@ -645,6 +759,9 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(
     dicomImage->setMetadata(metadata);
     dicomImage->setSopInstanceUid(metadata->sopInstanceUid);
     dicomImage->setInstanceNumber(metadata->instanceNumber);
+    dicomImage->setFrameCount(metadata->numberOfFrames);
+    dicomImage->setFrameIndex(selectedFrameIndex);
+    dicomImage->setCineTiming(metadata->frameTimeMs, metadata->cineRateFps, metadata->frameIntervalMs);
     dicomImage->setPixelSpacing(pixelSpacingX, pixelSpacingY);
     if (hasImagePositionPatient)
     {

@@ -1,5 +1,7 @@
 #include "Model/DicomImage.h"
 
+#include <algorithm>
+
 namespace
 {
 const QString& emptyString()
@@ -47,6 +49,45 @@ int DicomImage::width() const
 int DicomImage::height() const
 {
     return m_height;
+}
+
+int DicomImage::frameCount() const
+{
+    return m_frameCount;
+}
+
+int DicomImage::frameIndex() const
+{
+    return m_frameIndex;
+}
+
+double DicomImage::cineFrameIntervalMs() const
+{
+    if (!m_metadata)
+    {
+        return 100.0;
+    }
+
+    if (m_frameIndex >= 0 && m_frameIndex < static_cast<int>(m_metadata->frameTimeVectorMs.size()))
+    {
+        const double frameTime = m_metadata->frameTimeVectorMs[static_cast<std::size_t>(m_frameIndex)];
+        if (frameTime > 0.0)
+        {
+            return frameTime;
+        }
+    }
+
+    return m_metadata->frameIntervalMs > 0.0 ? m_metadata->frameIntervalMs : 100.0;
+}
+
+double DicomImage::frameTimeMs() const
+{
+    return m_metadata ? m_metadata->frameTimeMs : 0.0;
+}
+
+double DicomImage::cineRateFps() const
+{
+    return m_metadata ? m_metadata->cineRateFps : 0.0;
 }
 
 bool DicomImage::hasRawPixels() const
@@ -185,6 +226,26 @@ void DicomImage::setDimensions(int width, int height)
     m_height = height;
     mutableMetadata().columns = width;
     mutableMetadata().rows = height;
+}
+
+void DicomImage::setFrameCount(int frameCount)
+{
+    m_frameCount = std::max(1, frameCount);
+    m_frameIndex = std::clamp(m_frameIndex, 0, m_frameCount - 1);
+    mutableMetadata().numberOfFrames = m_frameCount;
+}
+
+void DicomImage::setFrameIndex(int frameIndex)
+{
+    m_frameIndex = std::clamp(frameIndex, 0, m_frameCount - 1);
+}
+
+void DicomImage::setCineTiming(double frameTimeMs, double cineRateFps, double frameIntervalMs)
+{
+    auto& metadata = mutableMetadata();
+    metadata.frameTimeMs = frameTimeMs > 0.0 ? frameTimeMs : 0.0;
+    metadata.cineRateFps = cineRateFps > 0.0 ? cineRateFps : 0.0;
+    metadata.frameIntervalMs = frameIntervalMs > 0.0 ? frameIntervalMs : 100.0;
 }
 
 void DicomImage::setRawPixels(const std::vector<int16_t>& rawPixels)

@@ -1,11 +1,7 @@
 name: CI
 
 on:
-  push:
-    branches:
-      - main
-      - master
-  pull_request:
+  workflow_dispatch:
 
 jobs:
   build-linux:
@@ -25,6 +21,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Install SQLite Qt SQL plugin
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends libqt6sql6-sqlite
+          rm -rf /var/lib/apt/lists/*
 
       - name: Inspect CI image
         run: |
@@ -58,3 +60,6 @@ jobs:
 
       - name: Build
         run: cmake --build build-ci --parallel
+
+      - name: Test
+        run: ctest --test-dir build-ci --output-on-failure

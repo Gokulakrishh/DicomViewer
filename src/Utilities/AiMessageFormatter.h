@@ -4,6 +4,11 @@
 #include <QString>
 #include <QStringList>
 
+/**
+ * @brief Converts simple AI markdown-like text into safe HTML for QTextEdit.
+ * @param message Plain text AI response.
+ * @return HTML fragment suitable for display.
+ */
 inline QString formatAiMessageToHtml(const QString& message)
 {
     QString html = message.trimmed().toHtmlEscaped();

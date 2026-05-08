@@ -5,10 +5,15 @@ class vtkRenderer;
 class vtkRenderWindow;
 class vtkVolume;
 
+/**
+ * @brief Maintains and applies volume viewer camera state.
+ */
 class VtkVolumeCameraController
 {
 public:
+    /** @brief Captures the renderer's initial camera state. */
     void captureInitialState(vtkRenderer& renderer);
+    /** @brief Applies rotation and zoom controls relative to the captured state. */
     void applyView(
         vtkRenderer& renderer,
         vtkRenderWindow& renderWindow,

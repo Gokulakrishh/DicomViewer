@@ -22,9 +22,18 @@ class vtkSmartVolumeMapper;
 class vtkVolume;
 class vtkVolumeProperty;
 
+/**
+ * @brief VTK volume rendering viewer window.
+ *
+ * Responsibilities:
+ * - Render diagnostic volumes with selectable transfer-function presets.
+ * - Provide camera rotation/zoom controls.
+ * - Use derived preprocessing volumes without modifying source data.
+ */
 class VtkVolumeViewerWindow : public QMainWindow
 {
 public:
+    /** @brief Creates a VTK volume viewer window. */
     explicit VtkVolumeViewerWindow(
         std::shared_ptr<IVolumeData> diagnosticVolume,
         ThreeDProfileSelection profileSelection,

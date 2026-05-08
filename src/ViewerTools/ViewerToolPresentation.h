@@ -10,6 +10,9 @@
 class QAction;
 class QToolBar;
 
+/**
+ * @brief Viewer toolbar tool identifiers shared by main and MPR windows.
+ */
 enum class ViewerToolId
 {
     WindowLevel,
@@ -21,17 +24,31 @@ enum class ViewerToolId
     RectangleRoi
 };
 
+/**
+ * @brief Shared toolbar presentation for viewer tools.
+ *
+ * Responsibilities:
+ * - Create mutually exclusive QAction entries for viewer tools.
+ * - Keep labels/tool ids centralized so main and MPR windows use the same
+ *   presentation vocabulary while retaining independent behavior.
+ */
 class ViewerToolPresentation final : public QObject
 {
     Q_OBJECT
 
 public:
+    /** @brief Creates actions in a toolbar. */
     explicit ViewerToolPresentation(QToolBar& toolBar, QObject* parent = nullptr);
 
+    /** @brief Sets callback invoked when active tool changes. */
     void setSelectionChangedCallback(std::function<void(std::optional<ViewerToolId>)> callback);
+    /** @brief Returns the QAction for a tool id. */
     [[nodiscard]] QAction* action(ViewerToolId toolId) const;
+    /** @brief Returns the active tool id, if any. */
     [[nodiscard]] std::optional<ViewerToolId> activeTool() const;
+    /** @brief Enables or disables one tool action. */
     void setToolEnabled(ViewerToolId toolId, bool enabled);
+    /** @brief Sets the active tool programmatically. */
     void setActiveTool(std::optional<ViewerToolId> toolId);
 
 private:

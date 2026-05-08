@@ -16,18 +16,34 @@ class vtkRenderer;
 class vtkResliceImageViewer;
 class vtkGenericOpenGLRenderWindow;
 
+/**
+ * @brief VTK scene adapter for MPR slice and reference panes.
+ *
+ * Responsibilities:
+ * - Own VTK reslice viewers/renderers for MPR panes.
+ * - Convert between display positions, normalized positions, and world indices.
+ * - Apply WL/WW, crosshair, zoom, and pan state to VTK.
+ */
 class VtkMprSceneAdapter
 {
 public:
+    /** @brief Creates an empty MPR scene adapter. */
     VtkMprSceneAdapter();
     ~VtkMprSceneAdapter();
 
+    /** @brief Attaches a VTK widget to one slice plane. */
     void attachPane(MprSlicePlane plane, QVTKOpenGLNativeWidget& widget);
+    /** @brief Attaches the 3D reference pane widget. */
     void attachReferencePane(QVTKOpenGLNativeWidget& widget);
+    /** @brief Initializes VTK viewers from volume image data. */
     void initialize(vtkImageData& imageData, int windowLevel, int windowWidth);
+    /** @brief Applies crosshair position in world coordinates. */
     void applyCursorPositionWorld(const MprCursorPositionWorld& cursorPosition);
+    /** @brief Applies WL/WW to all MPR panes. */
     void applyWindowLevelWidth(int level, int width);
+    /** @brief Applies zoom to a plane. */
     void zoom(MprSlicePlane plane, const QPointF& normalizedDelta);
+    /** @brief Applies pan to a plane. */
     void pan(MprSlicePlane plane, const QPointF& displayDelta, const QSize& widgetSize);
     [[nodiscard]] MprCursorPositionWorld worldPositionFromDisplayPosition(
         MprSlicePlane plane,
