@@ -5,8 +5,9 @@
 /**
  * @brief Local database configuration.
  *
- * The application currently uses a local SQLite file to avoid embedded external
- * database credentials in distributed builds.
+ * The application uses a local SQLite file resolved from the platform app data
+ * location. The path is carried as a value object for database services; it is
+ * not intended as a user-facing deployment setting.
  */
 class DatabaseSettings
 {

@@ -6,6 +6,7 @@
 #include "Model/VolumeData.h"
 
 #include <QDebug>
+#include <QStringList>
 
 #include <algorithm>
 #include <array>
@@ -25,6 +26,35 @@ AppError makeVolumeBuildError(ErrorCode code, const QString& technicalMessage, c
         "Volume Builder",
         technicalMessage,
         userMessage};
+}
+
+void appendGeometryWarning(QStringList& warnings, const QString& message)
+{
+    if (!warnings.contains(message))
+    {
+        warnings.append(message);
+    }
+
+    qWarning().noquote() << "[VolumeBuilder]" << message;
+}
+
+QString imageIdentity(const DicomImage& image)
+{
+    QStringList parts;
+    if (!image.sopInstanceUid().isEmpty())
+    {
+        parts << QString("SOP=%1").arg(image.sopInstanceUid());
+    }
+    if (!image.instanceNumber().isEmpty())
+    {
+        parts << QString("Instance=%1").arg(image.instanceNumber());
+    }
+    if (image.frameCount() > 1)
+    {
+        parts << QString("Frame=%1").arg(image.frameIndex() + 1);
+    }
+
+    return parts.isEmpty() ? QString("affected slice") : parts.join(", ");
 }
 }
 
@@ -145,10 +175,16 @@ VolumeBuilder::SliceBasis VolumeBuilder::deriveSliceBasis(const DicomImage& firs
 void VolumeBuilder::validateImageOrientation(
     const DicomImage& image,
     const SliceBasis& referenceBasis,
-    const VolumeValidationSettings& settings)
+    const VolumeValidationSettings& settings,
+    QStringList& warnings)
 {
     if (!image.hasImageOrientationPatient())
     {
+        appendGeometryWarning(
+            warnings,
+            QString("One or more slices are missing Image Orientation Patient metadata. "
+                    "MPR/3D can continue, but displayed geometry may be approximate. %1")
+                .arg(imageIdentity(image)));
         return;
     }
 
@@ -157,27 +193,30 @@ void VolumeBuilder::validateImageOrientation(
         std::abs(dotProduct(imageBasis.column, referenceBasis.column)) < (1.0 - settings.orientationAlignmentTolerance) ||
         std::abs(dotProduct(imageBasis.normal, referenceBasis.normal)) < (1.0 - settings.orientationAlignmentTolerance))
     {
-        throw makeVolumeBuildError(
-            ErrorCode::VolumeBuildInconsistentOrientation,
-            "Series has inconsistent slice orientation",
-            "The selected series has inconsistent slice orientation.");
+        appendGeometryWarning(
+            warnings,
+            QString("The selected series has inconsistent slice orientation. "
+                    "MPR/3D can continue, but derived plane geometry may be unreliable. %1")
+                .arg(imageIdentity(image)));
     }
 }
 
 void VolumeBuilder::validateImageSpacing(
     const DicomImage& image,
     const DicomImage& referenceImage,
-    const VolumeValidationSettings& settings)
+    const VolumeValidationSettings& settings,
+    QStringList& warnings)
 {
-    return;
     const bool referenceHasPixelSpacing = referenceImage.hasPixelSpacing();
     const bool imageHasPixelSpacing = image.hasPixelSpacing();
     if (referenceHasPixelSpacing != imageHasPixelSpacing)
     {
-        throw makeVolumeBuildError(
-            ErrorCode::VolumeBuildInconsistentPixelSpacing,
-            "Series has inconsistent pixel spacing availability",
-            "The selected series has inconsistent pixel spacing information.");
+        appendGeometryWarning(
+            warnings,
+            QString("The selected series has inconsistent pixel spacing availability. "
+                    "MPR/3D will use available spacing where possible. %1")
+                .arg(imageIdentity(image)));
+        return;
     }
 
     if (!referenceHasPixelSpacing)
@@ -188,19 +227,23 @@ void VolumeBuilder::validateImageSpacing(
     if (std::abs(image.pixelSpacingX() - referenceImage.pixelSpacingX()) > settings.spacingTolerance ||
         std::abs(image.pixelSpacingY() - referenceImage.pixelSpacingY()) > settings.spacingTolerance)
     {
-        throw makeVolumeBuildError(
-            ErrorCode::VolumeBuildInconsistentPixelSpacing,
-            "Series has inconsistent in-plane pixel spacing",
-            "The selected series has inconsistent in-plane pixel spacing.");
+        appendGeometryWarning(
+            warnings,
+            QString("Series has inconsistent in-plane pixel spacing: reference=(%1,%2), image=(%3,%4), %5")
+                .arg(referenceImage.pixelSpacingX())
+                .arg(referenceImage.pixelSpacingY())
+                .arg(image.pixelSpacingX())
+                .arg(image.pixelSpacingY())
+                .arg(imageIdentity(image)));
     }
 }
 
 void VolumeBuilder::validateSliceSpacing(
     const VolumeInput& input,
     const SliceBasis& basis,
-    const VolumeValidationSettings& settings)
+    const VolumeValidationSettings& settings,
+    QStringList& warnings)
 {
-    return;
     if (input.orderedImages.size() < 2)
     {
         return;
@@ -218,10 +261,16 @@ void VolumeBuilder::validateSliceSpacing(
 
     if (!allHavePosition)
     {
+        appendGeometryWarning(
+            warnings,
+            "The selected series has incomplete Image Position Patient metadata. "
+            "MPR/3D will use DICOM spacing fallback values.");
         return;
     }
 
     double expectedSpacing = -1.0;
+    bool reportedDuplicatePosition = false;
+    bool reportedNonUniformSpacing = false;
     for (std::size_t index = 1; index < input.orderedImages.size(); ++index)
     {
         const double previousCoordinate = sliceCoordinate(*input.orderedImages[index - 1], basis);
@@ -229,10 +278,16 @@ void VolumeBuilder::validateSliceSpacing(
         const double delta = std::abs(currentCoordinate - previousCoordinate);
         if (delta <= settings.spacingTolerance)
         {
-            throw makeVolumeBuildError(
-                ErrorCode::VolumeBuildDuplicateSlicePosition,
-                "Series has duplicate or overlapping slice positions",
-                "The selected series contains duplicate or overlapping slice positions.");
+            if (!reportedDuplicatePosition)
+            {
+                appendGeometryWarning(
+                    warnings,
+                    QString("Series has duplicate or overlapping slice positions near ordered index %1; "
+                            "MPR will continue with spacing fallback where possible.")
+                        .arg(index));
+                reportedDuplicatePosition = true;
+            }
+            continue;
         }
 
         if (expectedSpacing < 0.0)
@@ -241,13 +296,19 @@ void VolumeBuilder::validateSliceSpacing(
             continue;
         }
 
-        if (settings.validateUniformSliceSpacing &&
-            std::abs(delta - expectedSpacing) > settings.spacingTolerance)
+        if (std::abs(delta - expectedSpacing) > settings.spacingTolerance)
         {
-            throw makeVolumeBuildError(
-                ErrorCode::VolumeBuildInconsistentSliceSpacing,
-                "Series has inconsistent slice spacing",
-                "The selected series has inconsistent slice spacing.");
+            if (!reportedNonUniformSpacing)
+            {
+                appendGeometryWarning(
+                    warnings,
+                    QString("Series has inconsistent slice spacing near ordered index %1: expected=%2, actual=%3. "
+                            "MPR will use robust derived spacing.")
+                        .arg(index)
+                        .arg(expectedSpacing)
+                        .arg(delta));
+                reportedNonUniformSpacing = true;
+            }
         }
     }
 }
@@ -255,7 +316,8 @@ void VolumeBuilder::validateSliceSpacing(
 void VolumeBuilder::validateSliceGeometry(
     const VolumeInput& input,
     const SliceBasis& basis,
-    const VolumeValidationSettings& settings)
+    const VolumeValidationSettings& settings,
+    QStringList& warnings)
 {
     if (!input.firstImage)
     {
@@ -266,13 +328,21 @@ void VolumeBuilder::validateSliceGeometry(
     }
 
     const DicomImage& referenceImage = *input.firstImage;
-    for (const auto* imagePtr : input.orderedImages)
+    if (!referenceImage.hasImageOrientationPatient())
     {
-        validateImageOrientation(*imagePtr, basis, settings);
-        validateImageSpacing(*imagePtr, referenceImage, settings);
+        appendGeometryWarning(
+            warnings,
+            "The reference slice is missing Image Orientation Patient metadata. "
+            "MPR/3D will use the default axial orientation.");
     }
 
-    validateSliceSpacing(input, basis, settings);
+    for (const auto* imagePtr : input.orderedImages)
+    {
+        validateImageOrientation(*imagePtr, basis, settings, warnings);
+        validateImageSpacing(*imagePtr, referenceImage, settings, warnings);
+    }
+
+    validateSliceSpacing(input, basis, settings, warnings);
 }
 
 double VolumeBuilder::sliceCoordinate(const DicomImage& image, const SliceBasis& basis)
@@ -298,7 +368,63 @@ void VolumeBuilder::sortSlicesByGeometry(std::vector<const DicomImage*>& ordered
         });
 }
 
-VolumeGeometry VolumeBuilder::buildGeometry(const VolumeInput& input, const SliceBasis& basis)
+double VolumeBuilder::deriveZSpacing(
+    const VolumeInput& input,
+    const SliceBasis& basis,
+    const VolumeValidationSettings& settings)
+{
+    if (input.depth > 1)
+    {
+        bool allHavePosition = true;
+        for (const auto* imagePtr : input.orderedImages)
+        {
+            if (!imagePtr->hasImagePositionPatient())
+            {
+                allHavePosition = false;
+                break;
+            }
+        }
+
+        if (allHavePosition)
+        {
+            std::vector<double> positiveDeltas;
+            positiveDeltas.reserve(input.orderedImages.size() - 1);
+            for (std::size_t index = 1; index < input.orderedImages.size(); ++index)
+            {
+                const double previousCoordinate = sliceCoordinate(*input.orderedImages[index - 1], basis);
+                const double currentCoordinate = sliceCoordinate(*input.orderedImages[index], basis);
+                const double delta = std::abs(currentCoordinate - previousCoordinate);
+                if (delta > settings.spacingTolerance)
+                {
+                    positiveDeltas.push_back(delta);
+                }
+            }
+
+            if (!positiveDeltas.empty())
+            {
+                const auto middle = positiveDeltas.begin() + static_cast<std::ptrdiff_t>(positiveDeltas.size() / 2);
+                std::nth_element(positiveDeltas.begin(), middle, positiveDeltas.end());
+                return *middle;
+            }
+        }
+    }
+
+    if (input.firstImage->spacingBetweenSlices() > 0.0)
+    {
+        return input.firstImage->spacingBetweenSlices();
+    }
+    if (input.firstImage->sliceThickness() > 0.0)
+    {
+        return input.firstImage->sliceThickness();
+    }
+
+    return 1.0;
+}
+
+VolumeGeometry VolumeBuilder::buildGeometry(
+    const VolumeInput& input,
+    const SliceBasis& basis,
+    const VolumeValidationSettings& settings)
 {
     VolumeGeometry geometry;
     geometry.dimensions = {input.width, input.height, input.depth};
@@ -307,22 +433,7 @@ VolumeGeometry VolumeBuilder::buildGeometry(const VolumeInput& input, const Slic
         input.firstImage->hasPixelSpacing() ? input.firstImage->pixelSpacingY() : 1.0,
         1.0};
 
-    if (input.depth > 1 &&
-        input.orderedImages.front()->hasImagePositionPatient() &&
-        input.orderedImages.back()->hasImagePositionPatient())
-    {
-        const double firstCoordinate = sliceCoordinate(*input.orderedImages.front(), basis);
-        const double lastCoordinate = sliceCoordinate(*input.orderedImages.back(), basis);
-        geometry.spacing.z = std::abs(lastCoordinate - firstCoordinate) / static_cast<double>(input.depth - 1);
-    }
-    else if (input.firstImage->spacingBetweenSlices() > 0.0)
-    {
-        geometry.spacing.z = input.firstImage->spacingBetweenSlices();
-    }
-    else if (input.firstImage->sliceThickness() > 0.0)
-    {
-        geometry.spacing.z = input.firstImage->sliceThickness();
-    }
+    geometry.spacing.z = deriveZSpacing(input, basis, settings);
 
     if (input.orderedImages.front()->hasImagePositionPatient())
     {
@@ -357,7 +468,7 @@ std::vector<int16_t> VolumeBuilder::buildVoxelBuffer(const VolumeInput& input)
     return voxels;
 }
 
-AppResult<std::shared_ptr<IVolumeData>> VolumeBuilder::buildFromDiagnosticSeries(const Series& diagnosticSeries) const
+AppResult<VolumeBuildResult> VolumeBuilder::buildFromDiagnosticSeries(const Series& diagnosticSeries) const
 {
     try
     {
@@ -397,8 +508,9 @@ AppResult<std::shared_ptr<IVolumeData>> VolumeBuilder::buildFromDiagnosticSeries
                 << " lastCoord=" << sliceCoordinate(*lastOrderedImage, basis);*/
         }
 
-        validateSliceGeometry(input, basis, m_validationSettings);
-        VolumeGeometry geometry = buildGeometry(input, basis);
+        QStringList warnings;
+        validateSliceGeometry(input, basis, m_validationSettings, warnings);
+        VolumeGeometry geometry = buildGeometry(input, basis, m_validationSettings);
         /*qDebug().nospace()
             << "VolumeBuilder output geometry:"
             << " dims=(" << geometry.dimensions.x << ", " << geometry.dimensions.y << ", " << geometry.dimensions.z << ")"
@@ -410,7 +522,9 @@ AppResult<std::shared_ptr<IVolumeData>> VolumeBuilder::buildFromDiagnosticSeries
             << geometry.direction[6] << ", " << geometry.direction[7] << ", " << geometry.direction[8] << "]";*/
         std::vector<int16_t> voxels = buildVoxelBuffer(input);
 
-        return std::make_shared<VolumeData<int16_t>>(std::move(geometry), std::move(voxels));
+        return VolumeBuildResult{
+            std::make_shared<VolumeData<int16_t>>(std::move(geometry), std::move(voxels)),
+            std::move(warnings)};
     }
     catch (const AppError& error)
     {

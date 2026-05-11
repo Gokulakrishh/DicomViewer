@@ -112,6 +112,7 @@ struct DicomInstanceMetadata
     int bitsStored{0};
     int highBit{0};
     int pixelRepresentation{0};
+    QString transferSyntaxUid;
     QString photometricInterpretation;
 
     bool hasPixelSpacing{false};

@@ -2,11 +2,11 @@
 
 #include "Errors/AppResult.h"
 #include "Utilities/VolumeValidationSettings.h"
-#include "Model/IVolumeData.h"
+#include "Model/VolumeBuildResult.h"
 
 #include <array>
 #include <cstdint>
-#include <memory>
+#include <QStringList>
 #include <vector>
 
 class DicomImage;
@@ -22,7 +22,9 @@ class Series;
  *
  * Assumptions:
  * - Input images already contain raw pixel data.
- * - Geometry validation failures should block derived volume construction.
+ * - Dimension and pixel availability failures block derived volume construction.
+ * - Geometry quality findings are returned as warnings so the UI can ask the
+ *   user whether to continue.
  */
 class VolumeBuilder
 {
@@ -36,9 +38,9 @@ public:
     /**
      * @brief Builds a volume from a diagnostic DICOM series.
      * @param diagnosticSeries Series with loaded raw pixels.
-     * @return Volume data or structured validation error.
+     * @return Volume data with warnings, or structured build error.
      */
-    AppResult<std::shared_ptr<IVolumeData>> buildFromDiagnosticSeries(const Series& diagnosticSeries) const;
+    AppResult<VolumeBuildResult> buildFromDiagnosticSeries(const Series& diagnosticSeries) const;
 
 private:
     struct SliceBasis
@@ -67,22 +69,33 @@ private:
     static void validateSliceGeometry(
         const VolumeInput& input,
         const SliceBasis& basis,
-        const VolumeValidationSettings& settings);
+        const VolumeValidationSettings& settings,
+        QStringList& warnings);
     static void validateImageOrientation(
         const DicomImage& image,
         const SliceBasis& referenceBasis,
-        const VolumeValidationSettings& settings);
+        const VolumeValidationSettings& settings,
+        QStringList& warnings);
     static void validateImageSpacing(
         const DicomImage& image,
         const DicomImage& referenceImage,
-        const VolumeValidationSettings& settings);
+        const VolumeValidationSettings& settings,
+        QStringList& warnings);
     static void validateSliceSpacing(
         const VolumeInput& input,
         const SliceBasis& basis,
-        const VolumeValidationSettings& settings);
+        const VolumeValidationSettings& settings,
+        QStringList& warnings);
     static double sliceCoordinate(const DicomImage& image, const SliceBasis& basis);
     static void sortSlicesByGeometry(std::vector<const DicomImage*>& orderedImages, const SliceBasis& basis);
-    static VolumeGeometry buildGeometry(const VolumeInput& input, const SliceBasis& basis);
+    static double deriveZSpacing(
+        const VolumeInput& input,
+        const SliceBasis& basis,
+        const VolumeValidationSettings& settings);
+    static VolumeGeometry buildGeometry(
+        const VolumeInput& input,
+        const SliceBasis& basis,
+        const VolumeValidationSettings& settings);
     static std::vector<int16_t> buildVoxelBuffer(const VolumeInput& input);
 
 private:

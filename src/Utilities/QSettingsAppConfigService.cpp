@@ -71,8 +71,7 @@ QSettingsAppConfigService::QSettingsAppConfigService()
 DatabaseSettings QSettingsAppConfigService::loadDatabaseSettings() const
 {
     DatabaseSettings databaseSettings;
-    const QString configuredFilePath = readValue("database", "filePath").toString().trimmed();
-    databaseSettings.setFilePath(configuredFilePath.isEmpty() ? defaultDatabaseFilePath() : configuredFilePath);
+    databaseSettings.setFilePath(defaultDatabaseFilePath());
     return databaseSettings;
 }
 
@@ -119,26 +118,6 @@ AiServiceSettings QSettingsAppConfigService::loadAiServiceSettings() const
         readValue("ai", "maxOutputTokens", aiServiceSettings.maxOutputTokens).toInt();
 
     return aiServiceSettings;
-}
-
-VolumeValidationSettings QSettingsAppConfigService::loadVolumeValidationSettings() const
-{
-    VolumeValidationSettings validationSettings;
-    validationSettings.orientationAlignmentTolerance =
-        readValue(
-            "volumeValidation",
-            "orientationAlignmentTolerance",
-            validationSettings.orientationAlignmentTolerance)
-            .toDouble();
-    validationSettings.spacingTolerance =
-        readValue("volumeValidation", "spacingTolerance", validationSettings.spacingTolerance).toDouble();
-    validationSettings.validateUniformSliceSpacing =
-        readValue(
-            "volumeValidation",
-            "validateUniformSliceSpacing",
-            validationSettings.validateUniformSliceSpacing)
-            .toBool();
-    return validationSettings;
 }
 
 QString QSettingsAppConfigService::loadAiApiKey(QString* errorMessage) const

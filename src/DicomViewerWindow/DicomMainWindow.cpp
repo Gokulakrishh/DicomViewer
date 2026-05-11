@@ -98,6 +98,31 @@ QString resolveAuditFilePath()
     directory.mkpath(".");
     return directory.filePath("audit.jsonl");
 }
+
+QString buildVolumeGeometryWarningMessage(const QString& viewerName, const QStringList& warnings)
+{
+    QStringList uniqueWarnings;
+    for (const QString& warning : warnings)
+    {
+        const QString trimmed = warning.trimmed();
+        if (!trimmed.isEmpty() && !uniqueWarnings.contains(trimmed))
+        {
+            uniqueWarnings.append(trimmed);
+        }
+    }
+
+    QString message = QString(
+        "The selected series has DICOM geometry metadata issues. %1 can still be opened, "
+        "but slice position, spacing, or orientation may be approximate.\n\n").arg(viewerName);
+
+    for (int index = 0; index < uniqueWarnings.size(); ++index)
+    {
+        message += QString("%1. %2\n").arg(index + 1).arg(uniqueWarnings.at(index));
+    }
+
+    message += QString("\nContinue opening %1 anyway?").arg(viewerName);
+    return message;
+}
 }
 
 DicomMainWindow::DicomMainWindow(
@@ -197,7 +222,6 @@ void DicomMainWindow::setupCoreServices()
     m_auditService->addSink(std::make_shared<JsonlAuditSink>(resolveAuditFilePath()));
     m_advancedSeriesVolumeService = std::make_unique<AdvancedSeriesVolumeService>(
         *m_gdcmHandler,
-        m_appConfigService->loadVolumeValidationSettings(),
         m_auditService.get());
     m_viewportController = std::make_unique<DicomViewportController>(
         m_gdcmHandler.get(),
@@ -655,7 +679,20 @@ void DicomMainWindow::openMprViewer()
         m_warningDialogService->showError(volumeResult.error());
         return;
     }
-    std::shared_ptr<IVolumeData> volume = volumeResult.value();
+    const VolumeBuildResult& volumeBuildResult = volumeResult.value();
+    if (volumeBuildResult.hasWarnings())
+    {
+        loadingDialog.close();
+        if (!m_warningDialogService->confirmWarning(
+                "MPR Viewer",
+                buildVolumeGeometryWarningMessage("MPR Viewer", volumeBuildResult.warnings),
+                "Open Anyway",
+                "Cancel"))
+        {
+            return;
+        }
+    }
+    std::shared_ptr<IVolumeData> volume = volumeBuildResult.volume;
     std::vector<DicomWindowPreset> dicomWindowPresets;
     int activeDicomWindowPresetIndex = -1;
     if (const DicomImage* currentImage = m_viewportController->currentImage();
@@ -707,7 +744,20 @@ void DicomMainWindow::openThreeDViewer()
         m_warningDialogService->showError(diagnosticVolumeResult.error());
         return;
     }
-    std::shared_ptr<IVolumeData> diagnosticVolume = diagnosticVolumeResult.value();
+    const VolumeBuildResult& volumeBuildResult = diagnosticVolumeResult.value();
+    if (volumeBuildResult.hasWarnings())
+    {
+        loadingDialog.close();
+        if (!m_warningDialogService->confirmWarning(
+                "3D Viewer",
+                buildVolumeGeometryWarningMessage("3D Viewer", volumeBuildResult.warnings),
+                "Open Anyway",
+                "Cancel"))
+        {
+            return;
+        }
+    }
+    std::shared_ptr<IVolumeData> diagnosticVolume = volumeBuildResult.volume;
 
     QWidget* viewer = m_advancedViewerLauncher->showThreeDVolume(
         std::move(diagnosticVolume),

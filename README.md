@@ -44,21 +44,10 @@ You need:
 
 ## Build On A New Machine
 
-### 1. Configure Local SQLite
+### 1. Local SQLite
 
 The default desktop build uses local SQLite. No database server, database username, or database password is required.
-
-Example `config.ini`:
-
-```ini
-[database]
-databaseName=dicomviewer.sqlite
-
-[ai]
-provider=none
-baseUrl=
-apiKey=
-```
+The database file is created automatically in the platform application data folder.
 
 ### 2. Build
 

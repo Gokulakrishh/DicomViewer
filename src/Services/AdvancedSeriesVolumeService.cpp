@@ -2,7 +2,6 @@
 
 #include "Errors/AppError.h"
 #include "FileHandling/FileHandling.h"
-#include "Model/IVolumeData.h"
 #include "Model/DicomParameters.h"
 #include "Services/SeriesDataLoadService.h"
 #include "Services/VolumeBuilder.h"
@@ -22,17 +21,16 @@ AppError makeAdvancedViewerBuildError(const QString& technicalMessage, const QSt
 
 AdvancedSeriesVolumeService::AdvancedSeriesVolumeService(
     const FileHandling& fileHandling,
-    VolumeValidationSettings validationSettings,
     IAuditService* auditService)
     : m_fileHandling(fileHandling),
       m_auditService(auditService),
-      m_volumeBuilder(std::make_unique<VolumeBuilder>(std::move(validationSettings)))
+      m_volumeBuilder(std::make_unique<VolumeBuilder>())
 {
 }
 
 AdvancedSeriesVolumeService::~AdvancedSeriesVolumeService() = default;
 
-AppResult<std::shared_ptr<IVolumeData>> AdvancedSeriesVolumeService::buildDiagnosticVolume(const Series& lightweightSeries) const
+AppResult<VolumeBuildResult> AdvancedSeriesVolumeService::buildDiagnosticVolume(const Series& lightweightSeries) const
 {
     if (lightweightSeries.images().size() < 2)
     {

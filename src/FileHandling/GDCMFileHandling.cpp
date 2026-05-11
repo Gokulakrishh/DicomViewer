@@ -18,9 +18,52 @@
 #include <cstdint>
 #include <filesystem>
 #include <limits>
+#include <new>
 #include <gdcmImage.h>
+#include <gdcmFile.h>
+#include <gdcmFileMetaInformation.h>
 #include <gdcmPhotometricInterpretation.h>
 #include <gdcmTag.h>
+#include <gdcmTransferSyntax.h>
+
+namespace
+{
+QString transferSyntaxUid(const gdcm::ImageReader& reader)
+{
+    const char* value = reader.GetFile().GetHeader().GetDataSetTransferSyntax().GetString();
+    return value ? QString::fromLatin1(value).trimmed() : QString{};
+}
+
+qsizetype expectedFrameByteCount(
+    unsigned int width,
+    unsigned int height,
+    unsigned int samplesPerPixel,
+    unsigned int bitsAllocated)
+{
+    if (width == 0 || height == 0 || samplesPerPixel == 0 || bitsAllocated == 0)
+    {
+        return 0;
+    }
+
+    const unsigned int bytesPerSample = bitsAllocated <= 8 ? 1U : bitsAllocated <= 16 ? 2U : 0U;
+    if (bytesPerSample == 0)
+    {
+        return 0;
+    }
+
+    const quint64 byteCount =
+        static_cast<quint64>(width) *
+        static_cast<quint64>(height) *
+        static_cast<quint64>(samplesPerPixel) *
+        static_cast<quint64>(bytesPerSample);
+    if (byteCount > static_cast<quint64>(std::numeric_limits<qsizetype>::max()))
+    {
+        return 0;
+    }
+
+    return static_cast<qsizetype>(byteCount);
+}
+}
 
 GDCMFileHandling::GDCMFileHandling()
 {
@@ -150,11 +193,9 @@ QHash<int, std::shared_ptr<DicomImage>> GDCMFileHandling::loadImageDataFrames(
         return frames;
     }
 
-    const gdcm::Image& gdcmImage = reader.GetImage();
-    QVector<char> decodedBuffer(static_cast<qsizetype>(gdcmImage.GetBufferLength()));
-    if (!gdcmImage.GetBuffer(decodedBuffer.data()))
+    QVector<char> decodedBuffer;
+    if (!decodePixelBuffer(filePath, reader, decodedBuffer))
     {
-        qDebug() << "Failed to get pixel buffer for:" << filePath;
         return frames;
     }
 
@@ -349,6 +390,72 @@ QString GDCMFileHandling::readStringTag(const gdcm::StringFilter& stringFilter, 
     return value;
 }
 
+bool GDCMFileHandling::decodePixelBuffer(
+    const QString& filePath,
+    const gdcm::ImageReader& reader,
+    QVector<char>& decodedBuffer) const
+{
+    const gdcm::Image& gdcmImage = reader.GetImage();
+    const unsigned long bufferLength = gdcmImage.GetBufferLength();
+    if (bufferLength == 0)
+    {
+        qWarning().noquote()
+            << "[DICOMDecode] Empty decoded pixel buffer requested:"
+            << "file=" << filePath
+            << "transferSyntax=" << transferSyntaxUid(reader);
+        decodedBuffer.clear();
+        return false;
+    }
+
+    if (static_cast<unsigned long long>(bufferLength) >
+        static_cast<unsigned long long>(std::numeric_limits<qsizetype>::max()))
+    {
+        qWarning().noquote()
+            << "[DICOMDecode] Decoded pixel buffer is too large for this build:"
+            << "file=" << filePath
+            << "bytes=" << QString::number(static_cast<qulonglong>(bufferLength))
+            << "transferSyntax=" << transferSyntaxUid(reader);
+        decodedBuffer.clear();
+        return false;
+    }
+
+    try
+    {
+        decodedBuffer.resize(static_cast<qsizetype>(bufferLength));
+        if (!gdcmImage.GetBuffer(decodedBuffer.data()))
+        {
+            qWarning().noquote()
+                << "[DICOMDecode] Failed to decode DICOM pixel buffer:"
+                << "file=" << filePath
+                << "transferSyntax=" << transferSyntaxUid(reader);
+            decodedBuffer.clear();
+            return false;
+        }
+    }
+    catch (const std::bad_alloc&)
+    {
+        qWarning().noquote()
+            << "[DICOMDecode] Not enough memory to decode DICOM pixel buffer:"
+            << "file=" << filePath
+            << "bytes=" << QString::number(static_cast<qulonglong>(bufferLength))
+            << "transferSyntax=" << transferSyntaxUid(reader);
+        decodedBuffer.clear();
+        return false;
+    }
+    catch (const std::exception& exception)
+    {
+        qWarning().noquote()
+            << "[DICOMDecode] Exception while decoding DICOM pixel buffer:"
+            << "file=" << filePath
+            << "transferSyntax=" << transferSyntaxUid(reader)
+            << "error=" << exception.what();
+        decodedBuffer.clear();
+        return false;
+    }
+
+    return true;
+}
+
 std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(
     const QString& filePath,
     const gdcm::ImageReader& reader,
@@ -359,7 +466,6 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(
     const gdcm::Image& gdcmImage = reader.GetImage();
     const unsigned int width = gdcmImage.GetDimensions()[0];
     const unsigned int height = gdcmImage.GetDimensions()[1];
-    const unsigned long bufferLength = gdcmImage.GetBufferLength();
     const unsigned int samplesPerPixel = gdcmImage.GetPixelFormat().GetSamplesPerPixel();
     const unsigned int bitsAllocated = gdcmImage.GetPixelFormat().GetBitsAllocated();
     const bool isSignedPixelData = gdcmImage.GetPixelFormat().GetPixelRepresentation() != 0;
@@ -370,10 +476,8 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(
     const QVector<char>* buffer = decodedBuffer;
     if (!buffer)
     {
-        ownedBuffer.resize(static_cast<qsizetype>(bufferLength));
-        if (!gdcmImage.GetBuffer(ownedBuffer.data()))
+        if (!decodePixelBuffer(filePath, reader, ownedBuffer))
         {
-             qDebug() << "Failed to get pixel buffer for:" << filePath;
             return nullptr;
         }
         buffer = &ownedBuffer;
@@ -383,17 +487,21 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(
     stringFilter.SetFile(reader.GetFile());
     const int numberOfFrames = std::max(1, readStringTag(stringFilter, 0x0028, 0x0008).trimmed().toInt());
     const int selectedFrameIndex = std::clamp(frameIndex, 0, numberOfFrames - 1);
-    const unsigned int bytesPerSample = bitsAllocated <= 8 ? 1U : 2U;
-    const qsizetype frameByteCount = static_cast<qsizetype>(width)
-        * static_cast<qsizetype>(height)
-        * static_cast<qsizetype>(std::max(1U, samplesPerPixel))
-        * static_cast<qsizetype>(bytesPerSample);
+    const qsizetype frameByteCount = expectedFrameByteCount(width, height, std::max(1U, samplesPerPixel), bitsAllocated);
     const qsizetype frameOffset = frameByteCount * selectedFrameIndex;
-    const char* frameData = buffer->constData();
-    if (frameByteCount > 0 && frameOffset >= 0 && frameOffset + frameByteCount <= buffer->size())
+    if (frameByteCount <= 0 || frameOffset < 0 || frameOffset + frameByteCount > buffer->size())
     {
-        frameData = buffer->constData() + frameOffset;
+        qWarning().noquote()
+            << "[DICOMDecode] Decoded buffer does not contain the requested frame:"
+            << "file=" << filePath
+            << "frame=" << selectedFrameIndex
+            << "frames=" << numberOfFrames
+            << "frameBytes=" << frameByteCount
+            << "bufferBytes=" << buffer->size()
+            << "transferSyntax=" << transferSyntaxUid(reader);
+        return nullptr;
     }
+    const char* frameData = buffer->constData() + frameOffset;
 
     const auto readNumericTagValue = [this, &stringFilter](uint16_t group, uint16_t element, double fallbackValue) {
         const QString tagValue = readStringTag(stringFilter, group, element);
@@ -718,6 +826,7 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(
     metadata->bitsStored = static_cast<int>(gdcmImage.GetPixelFormat().GetBitsStored());
     metadata->highBit = static_cast<int>(gdcmImage.GetPixelFormat().GetHighBit());
     metadata->pixelRepresentation = isSignedPixelData ? 1 : 0;
+    metadata->transferSyntaxUid = transferSyntaxUid(reader);
     metadata->photometricInterpretation = readStringTag(stringFilter, 0x0028, 0x0004);
     metadata->rescaleType = readStringTag(stringFilter, 0x0028, 0x1054);
     metadata->voiLutFunction = readStringTag(stringFilter, 0x0028, 0x1056);

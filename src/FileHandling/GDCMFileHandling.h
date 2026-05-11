@@ -87,6 +87,8 @@ private:
     QString normalizeDicomDate(const QString& dicomDate) const;
     /** @brief Reads one DICOM string tag through GDCM. */
     QString readStringTag(const gdcm::StringFilter& stringFilter, uint16_t group, uint16_t element) const;
+    /** @brief Decodes a DICOM pixel buffer with diagnostics for malformed compressed streams. */
+    bool decodePixelBuffer(const QString& filePath, const gdcm::ImageReader& reader, QVector<char>& decodedBuffer) const;
     /** @brief Maps a GDCM image reader into a DicomImage object. */
     std::unique_ptr<DicomImage> loadDicomImage(
         const QString& filePath,

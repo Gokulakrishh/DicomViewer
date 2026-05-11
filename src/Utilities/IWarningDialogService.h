@@ -22,6 +22,12 @@ public:
     virtual void setParentWidget(QWidget* parent) = 0;
     /** @brief Shows a warning dialog. */
     virtual void showWarning(const QString& title, const QString& message) const = 0;
+    /** @brief Shows a warning confirmation dialog. */
+    virtual bool confirmWarning(
+        const QString& title,
+        const QString& message,
+        const QString& continueText = "Continue",
+        const QString& cancelText = "Cancel") const = 0;
     /** @brief Shows an error dialog for an AppError. */
     virtual void showError(const AppError& error) const = 0;
 };

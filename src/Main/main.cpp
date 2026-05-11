@@ -6,6 +6,7 @@
 #include "AppVersion.h"
 #include "Utilities/AppIcons.h"
 #include "Utilities/AppStyle.h"
+#include "Utilities/CrashReportService.h"
 #include "Utilities/QSettingsAppConfigService.h"
 #include "Utilities/WarningDialogService.h"
 
@@ -26,6 +27,7 @@ int main(int argc, char* argv[])
     app.setApplicationDisplayName(QString::fromUtf8(AppVersion::kDisplayName));
     app.setApplicationVersion(QString::fromUtf8(AppVersion::kVersionString));
     app.setWindowIcon(AppIcons::applicationIcon());
+    CrashReportService::install();
     AppStyle::apply(app);
 
     RegulatorySplashDialog splash;

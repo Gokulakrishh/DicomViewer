@@ -266,6 +266,7 @@ set(SRC_FILES
     src/Utilities/AppIcons.cpp
     src/Utilities/AppDialogBase.cpp
     src/Utilities/AiApiKeyDialog.cpp
+    src/Utilities/CrashReportService.cpp
     src/Utilities/MemoryManagementDebug.cpp
     src/Utilities/LoadingDialog.cpp
     src/Utilities/QSettingsAppConfigService.cpp
@@ -328,6 +329,7 @@ set(HEADER_FILES
     src/Utilities/AppDialogBase.h
     src/Utilities/AiApiKeyDialog.h
     src/Utilities/AiMessageFormatter.h
+    src/Utilities/CrashReportService.h
     src/Utilities/DatabaseSettings.h
     src/Utilities/DiagnosticImageRenderer.h
     src/Utilities/MemoryManagementDebug.h
@@ -350,6 +352,7 @@ set(HEADER_FILES
     src/Model/VolumeGeometry.h
     src/Model/IVolumeData.h
     src/Model/VolumeData.h
+    src/Model/VolumeBuildResult.h
     src/FileHandling/FileHandling.h
     src/FileHandling/GDCMFileHandling.h
     src/DicomViewerWindow/DicomPreviewPanel.h

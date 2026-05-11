@@ -11,7 +11,8 @@
  *
  * Responsibilities:
  * - Resolve config file location.
- * - Load database, AI, and validation settings from file/environment.
+ * - Resolve the default local SQLite database path.
+ * - Load optional AI settings from file/environment.
  *
  * Assumptions:
  * - This service is suitable for local development/baseline builds; secret
@@ -27,8 +28,6 @@ public:
     DatabaseSettings loadDatabaseSettings() const override;
     /** @brief Loads optional AI assistant settings. */
     AiServiceSettings loadAiServiceSettings() const override;
-    /** @brief Loads volume validation settings. */
-    VolumeValidationSettings loadVolumeValidationSettings() const override;
     /** @brief Loads the AI API key. */
     QString loadAiApiKey(QString* errorMessage = nullptr) const override;
     /** @brief Saves the AI API key. */

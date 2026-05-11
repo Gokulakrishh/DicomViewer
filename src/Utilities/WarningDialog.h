@@ -17,7 +17,14 @@ public:
 
     /** @brief Sets warning title and message. */
     void configure(const QString& title, const QString& message);
+    /** @brief Sets warning title, message, and confirmation button labels. */
+    void configureConfirmation(
+        const QString& title,
+        const QString& message,
+        const QString& continueText,
+        const QString& cancelText);
 
 private:
     QPushButton* m_okButton{nullptr};
+    QPushButton* m_cancelButton{nullptr};
 };

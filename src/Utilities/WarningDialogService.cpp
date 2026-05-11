@@ -22,6 +22,17 @@ void WarningDialogService::showWarning(const QString& title, const QString& mess
     dialog.exec();
 }
 
+bool WarningDialogService::confirmWarning(
+    const QString& title,
+    const QString& message,
+    const QString& continueText,
+    const QString& cancelText) const
+{
+    WarningDialog dialog(m_parent);
+    dialog.configureConfirmation(title, message, continueText, cancelText);
+    return dialog.exec() == QDialog::Accepted;
+}
+
 void WarningDialogService::showError(const AppError& error) const
 {
     present(error);

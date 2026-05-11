@@ -24,6 +24,12 @@ public:
     void setParentWidget(QWidget* parent) override;
     /** @brief Shows a warning dialog. */
     void showWarning(const QString& title, const QString& message) const override;
+    /** @brief Shows a warning confirmation dialog. */
+    bool confirmWarning(
+        const QString& title,
+        const QString& message,
+        const QString& continueText = "Continue",
+        const QString& cancelText = "Cancel") const override;
     /** @brief Shows an error dialog from AppError. */
     void showError(const AppError& error) const override;
     /** @brief Presents an AppError through the error presenter interface. */

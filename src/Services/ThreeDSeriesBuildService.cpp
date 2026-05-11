@@ -6,6 +6,8 @@
 #include "Services/ThreeDimensionalPipelineService.h"
 #include "Services/VolumeBuilder.h"
 
+#include <QDebug>
+
 #include <stdexcept>
 
 namespace
@@ -65,16 +67,20 @@ AppResult<ThreeDimensionalPipelineResult> ThreeDSeriesBuildService::buildFromDia
     const I3dPipelineProfile& profile) const
 {
     VolumeBuilder volumeBuilder(m_validationSettings);
-    const AppResult<std::shared_ptr<IVolumeData>> volumeResult = volumeBuilder.buildFromDiagnosticSeries(diagnosticSeries);
-    if (!volumeResult)
+    const AppResult<VolumeBuildResult> volumeBuildResult = volumeBuilder.buildFromDiagnosticSeries(diagnosticSeries);
+    if (!volumeBuildResult)
     {
-        return volumeResult.error();
+        return volumeBuildResult.error();
+    }
+    for (const QString& warning : volumeBuildResult.value().warnings)
+    {
+        qWarning().noquote() << "[3D Pipeline]" << warning;
     }
 
     ThreeDimensionalPipelineService pipelineService;
     try
     {
-        return pipelineService.buildMesh(*volumeResult.value(), profile);
+        return pipelineService.buildMesh(*volumeBuildResult.value().volume, profile);
     }
     catch (const AppError& error)
     {
