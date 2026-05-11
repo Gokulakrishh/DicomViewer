@@ -89,6 +89,13 @@ private:
     QString readStringTag(const gdcm::StringFilter& stringFilter, uint16_t group, uint16_t element) const;
     /** @brief Decodes a DICOM pixel buffer with diagnostics for malformed compressed streams. */
     bool decodePixelBuffer(const QString& filePath, const gdcm::ImageReader& reader, QVector<char>& decodedBuffer) const;
+    /** @brief Extracts standardized metadata without touching pixel data. */
+    std::shared_ptr<DicomInstanceMetadata> extractDicomInstanceMetadata(const gdcm::ImageReader& reader) const;
+    /** @brief Applies standardized metadata to a DicomImage container. */
+    void applyMetadataToDicomImage(
+        DicomImage& dicomImage,
+        const std::shared_ptr<DicomInstanceMetadata>& metadata,
+        int frameIndex) const;
     /** @brief Maps a GDCM image reader into a DicomImage object. */
     std::unique_ptr<DicomImage> loadDicomImage(
         const QString& filePath,
@@ -96,6 +103,10 @@ private:
         bool renderPixmap,
         int frameIndex = 0,
         const QVector<char>* decodedBuffer = nullptr) const;
+    /** @brief Builds a metadata-only image entry for hierarchy import. */
+    std::unique_ptr<DicomImage> createMetadataOnlyDicomImage(
+        const QString& filePath,
+        const gdcm::ImageReader& reader) const;
     /** @brief Builds patient/study/series metadata from one GDCM reader. */
     PatientPtr buildHierarchy(const QString& filePath, const gdcm::ImageReader& reader) const;
 
