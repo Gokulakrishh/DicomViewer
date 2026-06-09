@@ -4,6 +4,8 @@
 #include "Utilities/DatabaseSettings.h"
 
 #include <QGuiApplication>
+#include <QImage>
+#include <QPixmap>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
@@ -169,6 +171,37 @@ int main(int argc, char* argv[])
         || seriesPreviews.front().parentId != "1.2.3.study")
     {
         return fail("Series preview item did not carry navigation target.");
+    }
+
+    QImage generatedPreviewImage(16, 16, QImage::Format_RGB32);
+    generatedPreviewImage.fill(Qt::green);
+    const QPixmap generatedPreview = QPixmap::fromImage(generatedPreviewImage);
+    if (!service.upsertSeriesPreview("1.2.3.series", generatedPreview))
+    {
+        return fail("SQLite did not persist generated series preview.");
+    }
+
+    DicomPreviewItems previewsWithPixmap = service.getSeriesPreviewItemsForStudy("1.2.3.study");
+    if (previewsWithPixmap.size() != 1 || previewsWithPixmap.front().pixmap.isNull())
+    {
+        return fail("SQLite did not reload generated series preview.");
+    }
+
+    if (!service.savePatient(patient))
+    {
+        return fail("Failed to re-save metadata-only hierarchy: " + service.lastErrorText());
+    }
+
+    previewsWithPixmap = service.getSeriesPreviewItemsForStudy("1.2.3.study");
+    if (previewsWithPixmap.size() != 1 || previewsWithPixmap.front().pixmap.isNull())
+    {
+        return fail("Metadata-only re-save cleared the generated series preview.");
+    }
+
+    const DicomPreviewItems studyPreviewsWithPixmap = service.getStudyPreviewItemsForPatient("PAT-001");
+    if (studyPreviewsWithPixmap.size() != 1 || studyPreviewsWithPixmap.front().pixmap.isNull())
+    {
+        return fail("Study preview did not reuse persisted series preview.");
     }
 
     SliceMeasurementAnnotationRecord annotation;

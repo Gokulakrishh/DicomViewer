@@ -1,0 +1,10 @@
+Cross Axial Dicom Viewer
+Non-diagnostic demo notice
+
+This software build is intended only for education, research, and controlled product evaluation.
+
+It is not approved for diagnosis, treatment, clinical decision-making, emergency use, regulatory-certified use, or replacement of an approved clinical workstation.
+
+Known current limitations include incomplete malformed/corrupted DICOM verification and incomplete clinical-correctness verification for measurement and MPR workflows. These items are tracked internally as CAPA-001 and CAPA-002.
+
+Original DICOM files are treated as source input and are not modified by measurement annotations. Derived metadata, previews, and annotations are stored separately in local application data.

@@ -2,16 +2,14 @@
 
 #include <QAction>
 #include <QBuffer>
-#include <QCoreApplication>
-#include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
-#include <QStandardPaths>
 #include <QDate>
 #include <QCheckBox>
 #include <QDockWidget>
 #include <QDialog>
 #include <QComboBox>
+#include <QCoreApplication>
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -41,6 +39,7 @@
 #include "AI/QtHttpAiServerClient.h"
 #include "Utilities/AiApiKeyDialog.h"
 #include "Utilities/AiMessageFormatter.h"
+#include "Utilities/ApplicationPaths.h"
 #include "Utilities/AppIcons.h"
 #include "Utilities/DiagnosticImageRenderer.h"
 #include "Utilities/IAppConfigService.h"
@@ -53,6 +52,7 @@
 #include "ViewerTools/WindowLevelPreset.h"
 #include "Services/AnnotationReportService.h"
 #include "Services/AdvancedSeriesVolumeService.h"
+#include "Services/SeriesPreviewService.h"
 #include "Services/ThreeDProfiles/ThreeDProfileSelection.h"
 
 namespace
@@ -88,15 +88,7 @@ QString buildAdvancedViewerTitle(const QString& viewerName, const Series& select
 
 QString resolveAuditFilePath()
 {
-    QString appDataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    if (appDataPath.trimmed().isEmpty())
-    {
-        appDataPath = QDir(QCoreApplication::applicationDirPath()).filePath("audit");
-    }
-
-    QDir directory(appDataPath);
-    directory.mkpath(".");
-    return directory.filePath("audit.jsonl");
+    return ApplicationPaths::auditFilePath();
 }
 
 QString buildVolumeGeometryWarningMessage(const QString& viewerName, const QStringList& warnings)
@@ -229,10 +221,12 @@ void DicomMainWindow::setupCoreServices()
     m_databaseService = std::make_unique<SqliteService>(m_appConfigService->loadDatabaseSettings());
     m_measurementAnnotationStore = std::make_unique<MeasurementAnnotationStore>(*m_databaseService);
     m_annotationReportService = std::make_unique<AnnotationReportService>(*m_databaseService);
+    m_seriesPreviewService = std::make_unique<SeriesPreviewService>(*m_databaseService, *m_gdcmHandler);
     if (m_treeController)
     {
         m_treeController->setDatabaseService(m_databaseService.get());
         m_treeController->setAnnotationReportService(m_annotationReportService.get());
+        m_treeController->setSeriesPreviewService(m_seriesPreviewService.get());
     }
 }
 
@@ -1190,17 +1184,18 @@ void DicomMainWindow::openFolder()
     const QString folderPathCopy = folderPath;
     QPointer<LoadingDialog> loadingDialog(m_folderImportLoadingDialog);
     QPointer<DicomMainWindow> window(this);
-    m_folderImportWatcher->setFuture(QtConcurrent::run([databaseSettings, folderPathCopy, loadingDialog, window]() {
+    QObject* progressTarget = QCoreApplication::instance();
+    m_folderImportWatcher->setFuture(QtConcurrent::run([databaseSettings, folderPathCopy, loadingDialog, window, progressTarget]() {
         FolderImportResult result;
         result.folderName = QFileInfo(folderPathCopy).fileName();
-        const auto reportProgress = [loadingDialog, window](int value, const QString& message) {
-            if (!window)
+        const auto reportProgress = [loadingDialog, window, progressTarget](int value, const QString& message) {
+            if (!progressTarget)
             {
                 return;
             }
 
             QMetaObject::invokeMethod(
-                window,
+                progressTarget,
                 [loadingDialog, window, value, message]() {
                     if (window)
                     {

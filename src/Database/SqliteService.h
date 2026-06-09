@@ -174,6 +174,14 @@ public:
      */
     DicomPreviewItems getSeriesPreviewItemsForStudy(const QString& studyInstanceUid) override;
 
+    /**
+     * @brief Inserts or replaces a bounded representative preview for a series.
+     * @param seriesInstanceUid DICOM Series Instance UID.
+     * @param previewPixmap Derived thumbnail image.
+     * @return True when the preview row was updated.
+     */
+    bool upsertSeriesPreview(const QString& seriesInstanceUid, const QPixmap& previewPixmap) override;
+
 private:
     /** @brief Opens the connection lazily and updates availability flags. */
     bool ensureConnection();

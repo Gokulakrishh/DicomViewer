@@ -3,8 +3,10 @@
 #include "Model/DicomImage.h"
 #include "Utilities/DiagnosticImageRenderer.h"
 
+#include <QByteArray>
 #include <QDate>
 #include <QDebug>
+#include <QFile>
 #include <QFileInfo>
 #include <QImage>
 #include <QImageReader>
@@ -15,22 +17,66 @@
 #include <QtGlobal>
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
+#include <cstring>
+#include <exception>
 #include <filesystem>
 #include <limits>
 #include <new>
+#include <queue>
+#include <vector>
 #include <gdcmImage.h>
 #include <gdcmFile.h>
 #include <gdcmFileMetaInformation.h>
 #include <gdcmPhotometricInterpretation.h>
+#include <gdcmReader.h>
+#include <gdcmScanner.h>
 #include <gdcmTag.h>
 #include <gdcmTransferSyntax.h>
 
+#if defined(Q_OS_WIN) && defined(_MSC_VER)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#define CROSSAXIAL_HAS_WIN_SEH_GUARD 1
+#else
+#define CROSSAXIAL_HAS_WIN_SEH_GUARD 0
+#endif
+
 namespace
 {
+constexpr std::size_t kScannerBatchSize = 300;
+
+const gdcm::Tag kPatientIdTag(0x0010, 0x0020);
+const gdcm::Tag kPatientNameTag(0x0010, 0x0010);
+const gdcm::Tag kIssuerOfPatientIdTag(0x0010, 0x0021);
+const gdcm::Tag kPatientSexTag(0x0010, 0x0040);
+const gdcm::Tag kPatientBirthDateTag(0x0010, 0x0030);
+const gdcm::Tag kStudyInstanceUidTag(0x0020, 0x000D);
+const gdcm::Tag kStudyDateTag(0x0008, 0x0020);
+const gdcm::Tag kStudyDescriptionTag(0x0008, 0x1030);
+const gdcm::Tag kReferringPhysicianTag(0x0008, 0x0090);
+const gdcm::Tag kSeriesInstanceUidTag(0x0020, 0x000E);
+const gdcm::Tag kSeriesDescriptionTag(0x0008, 0x103E);
+const gdcm::Tag kSeriesNumberTag(0x0020, 0x0011);
+const gdcm::Tag kSopInstanceUidTag(0x0008, 0x0018);
+const gdcm::Tag kModalityTag(0x0008, 0x0060);
+const gdcm::Tag kInstanceNumberTag(0x0020, 0x0013);
+const gdcm::Tag kNumberOfFramesTag(0x0028, 0x0008);
+const gdcm::Tag kRowsTag(0x0028, 0x0010);
+const gdcm::Tag kColumnsTag(0x0028, 0x0011);
+
 QString transferSyntaxUid(const gdcm::ImageReader& reader)
 {
     const char* value = reader.GetFile().GetHeader().GetDataSetTransferSyntax().GetString();
+    return value ? QString::fromLatin1(value).trimmed() : QString{};
+}
+
+QString transferSyntaxUid(const gdcm::File& file)
+{
+    const char* value = file.GetHeader().GetDataSetTransferSyntax().GetString();
     return value ? QString::fromLatin1(value).trimmed() : QString{};
 }
 
@@ -63,6 +109,99 @@ qsizetype expectedFrameByteCount(
 
     return static_cast<qsizetype>(byteCount);
 }
+
+std::filesystem::path toFilesystemPath(const QString& path)
+{
+#if defined(Q_OS_WIN)
+    return std::filesystem::path(path.toStdWString());
+#else
+    return std::filesystem::path(path.toStdString());
+#endif
+}
+
+QString fromFilesystemPath(const std::filesystem::path& path)
+{
+#if defined(Q_OS_WIN)
+    return QString::fromStdWString(path.wstring());
+#else
+    return QString::fromStdString(path.string());
+#endif
+}
+
+QString scannedTagValue(const gdcm::Scanner::TagToValue& tagValues, const gdcm::Tag& tag)
+{
+    const auto it = tagValues.find(tag);
+    if (it == tagValues.end() || it->second == nullptr)
+    {
+        return {};
+    }
+
+    return QString::fromUtf8(it->second).trimmed();
+}
+
+int scannedPositiveInt(const gdcm::Scanner::TagToValue& tagValues, const gdcm::Tag& tag, int fallbackValue = 0)
+{
+    bool ok = false;
+    const int value = scannedTagValue(tagValues, tag).split('\\').value(0).trimmed().toInt(&ok);
+    return ok && value > 0 ? value : fallbackValue;
+}
+
+void addFolderImportScannerTags(gdcm::Scanner& scanner)
+{
+    scanner.AddTag(kPatientIdTag);
+    scanner.AddTag(kPatientNameTag);
+    scanner.AddTag(kIssuerOfPatientIdTag);
+    scanner.AddTag(kPatientSexTag);
+    scanner.AddTag(kPatientBirthDateTag);
+    scanner.AddTag(kStudyInstanceUidTag);
+    scanner.AddTag(kStudyDateTag);
+    scanner.AddTag(kStudyDescriptionTag);
+    scanner.AddTag(kReferringPhysicianTag);
+    scanner.AddTag(kSeriesInstanceUidTag);
+    scanner.AddTag(kSeriesDescriptionTag);
+    scanner.AddTag(kSeriesNumberTag);
+    scanner.AddTag(kSopInstanceUidTag);
+    scanner.AddTag(kModalityTag);
+    scanner.AddTag(kInstanceNumberTag);
+    scanner.AddTag(kNumberOfFramesTag);
+    scanner.AddTag(kRowsTag);
+    scanner.AddTag(kColumnsTag);
+}
+
+#if CROSSAXIAL_HAS_WIN_SEH_GUARD
+void logWindowsHardwareExceptionForFile(
+    const char* context,
+    const QString& filePath,
+    unsigned long exceptionCode)
+{
+    qCritical().noquote() << context
+                          << "file=" << filePath
+                          << "code=0x" + QString::number(exceptionCode, 16);
+}
+
+void logWindowsHardwareExceptionForFileDetail(
+    const char* context,
+    const QString& filePath,
+    const QString& detail,
+    unsigned long exceptionCode)
+{
+    qCritical().noquote() << context
+                          << "file=" << filePath
+                          << "detail=" << detail
+                          << "code=0x" + QString::number(exceptionCode, 16);
+}
+
+void logWindowsHardwareExceptionForBatch(
+    const char* context,
+    std::size_t batchStart,
+    std::size_t batchEnd,
+    unsigned long exceptionCode)
+{
+    qCritical().noquote() << context
+                          << "batch=" << static_cast<int>(batchStart) << "-" << static_cast<int>(batchEnd - 1)
+                          << "code=0x" + QString::number(exceptionCode, 16);
+}
+#endif
 }
 
 GDCMFileHandling::GDCMFileHandling()
@@ -74,69 +213,247 @@ GDCMFileHandling::GDCMFileHandling()
         << "*.img";
 }
 
+bool GDCMFileHandling::readGdcmImageReader(gdcm::ImageReader& reader, const QString& filePath)
+{
+#if CROSSAXIAL_HAS_WIN_SEH_GUARD
+    __try
+    {
+        return readGdcmImageReaderImpl(reader, filePath);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        const unsigned long exceptionCode = GetExceptionCode();
+        logWindowsHardwareExceptionForFile("[DICOMRead] Windows hardware exception in GDCM image read:",
+                                           filePath,
+                                           exceptionCode);
+        return false;
+    }
+#else
+    return readGdcmImageReaderImpl(reader, filePath);
+#endif
+}
+
+bool GDCMFileHandling::readGdcmImageReaderImpl(gdcm::ImageReader& reader, const QString& filePath)
+{
+    try
+    {
+        if (reader.Read())
+        {
+            return true;
+        }
+
+        qWarning().noquote() << "[DICOMRead] GDCM could not read image:"
+                             << "file=" << filePath;
+    }
+    catch (const std::bad_alloc&)
+    {
+        qWarning().noquote() << "[DICOMRead] GDCM image read exhausted memory:"
+                             << "file=" << filePath;
+    }
+    catch (const std::exception& exception)
+    {
+        qWarning().noquote() << "[DICOMRead] GDCM image read threw exception:"
+                             << "file=" << filePath
+                             << "error=" << exception.what();
+    }
+    catch (...)
+    {
+        qWarning().noquote() << "[DICOMRead] GDCM image read threw unknown exception:"
+                             << "file=" << filePath;
+    }
+
+    return false;
+}
+
+bool GDCMFileHandling::readGdcmReader(gdcm::Reader& reader, const QString& filePath)
+{
+#if CROSSAXIAL_HAS_WIN_SEH_GUARD
+    __try
+    {
+        return readGdcmReaderImpl(reader, filePath);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        const unsigned long exceptionCode = GetExceptionCode();
+        logWindowsHardwareExceptionForFile("[DICOMRead] Windows hardware exception in GDCM hierarchy read:",
+                                           filePath,
+                                           exceptionCode);
+        return false;
+    }
+#else
+    return readGdcmReaderImpl(reader, filePath);
+#endif
+}
+
+bool GDCMFileHandling::readGdcmReaderImpl(gdcm::Reader& reader, const QString& filePath)
+{
+    try
+    {
+        if (reader.Read())
+        {
+            return true;
+        }
+
+        qWarning().noquote() << "[DICOMRead] GDCM could not read hierarchy:"
+                             << "file=" << filePath;
+    }
+    catch (const std::bad_alloc&)
+    {
+        qWarning().noquote() << "[DICOMRead] GDCM hierarchy read exhausted memory:"
+                             << "file=" << filePath;
+    }
+    catch (const std::exception& exception)
+    {
+        qWarning().noquote() << "[DICOMRead] GDCM hierarchy read threw exception:"
+                             << "file=" << filePath
+                             << "error=" << exception.what();
+    }
+    catch (...)
+    {
+        qWarning().noquote() << "[DICOMRead] GDCM hierarchy read threw unknown exception:"
+                             << "file=" << filePath;
+    }
+
+    return false;
+}
+
+bool GDCMFileHandling::scanGdcmMetadataBatch(
+    gdcm::Scanner& scanner,
+    const gdcm::Directory::FilenamesType& filenames,
+    std::size_t batchStart,
+    std::size_t batchEnd)
+{
+#if CROSSAXIAL_HAS_WIN_SEH_GUARD
+    __try
+    {
+        return scanGdcmMetadataBatchImpl(scanner, filenames, batchStart, batchEnd);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        const unsigned long exceptionCode = GetExceptionCode();
+        logWindowsHardwareExceptionForBatch("[DICOMImport] Windows hardware exception in GDCM metadata scan:",
+                                            batchStart,
+                                            batchEnd,
+                                            exceptionCode);
+        return false;
+    }
+#else
+    return scanGdcmMetadataBatchImpl(scanner, filenames, batchStart, batchEnd);
+#endif
+}
+
+bool GDCMFileHandling::scanGdcmMetadataBatchImpl(
+    gdcm::Scanner& scanner,
+    const gdcm::Directory::FilenamesType& filenames,
+    std::size_t batchStart,
+    std::size_t batchEnd)
+{
+    try
+    {
+        if (!scanner.Scan(filenames))
+        {
+            qWarning().noquote() << "[DICOMImport] GDCM metadata scan reported failure for batch"
+                                 << static_cast<int>(batchStart) << "-" << static_cast<int>(batchEnd - 1);
+        }
+        return true;
+    }
+    catch (const std::bad_alloc&)
+    {
+        qWarning().noquote() << "[DICOMImport] GDCM metadata scan exhausted memory for batch"
+                             << static_cast<int>(batchStart) << "-" << static_cast<int>(batchEnd - 1);
+    }
+    catch (const std::exception& exception)
+    {
+        qWarning().noquote() << "[DICOMImport] GDCM metadata scan threw exception for batch"
+                             << static_cast<int>(batchStart) << "-" << static_cast<int>(batchEnd - 1)
+                             << "error=" << exception.what();
+    }
+    catch (...)
+    {
+        qWarning().noquote() << "[DICOMImport] GDCM metadata scan threw unknown exception for batch"
+                             << static_cast<int>(batchStart) << "-" << static_cast<int>(batchEnd - 1);
+    }
+
+    return false;
+}
+
+bool GDCMFileHandling::getGdcmImageBuffer(
+    const gdcm::Image& gdcmImage,
+    char* targetBuffer,
+    const QString& filePath,
+    const QString& transferSyntax)
+{
+#if CROSSAXIAL_HAS_WIN_SEH_GUARD
+    __try
+    {
+        return getGdcmImageBufferImpl(gdcmImage, targetBuffer, filePath, transferSyntax);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        const unsigned long exceptionCode = GetExceptionCode();
+        logWindowsHardwareExceptionForFileDetail("[DICOMDecode] Windows hardware exception in GDCM buffer decode:",
+                                                 filePath,
+                                                 transferSyntax,
+                                                 exceptionCode);
+        return false;
+    }
+#else
+    return getGdcmImageBufferImpl(gdcmImage, targetBuffer, filePath, transferSyntax);
+#endif
+}
+
+bool GDCMFileHandling::getGdcmImageBufferImpl(
+    const gdcm::Image& gdcmImage,
+    char* targetBuffer,
+    const QString& filePath,
+    const QString& transferSyntax)
+{
+    try
+    {
+        if (gdcmImage.GetBuffer(targetBuffer))
+        {
+            return true;
+        }
+
+        qWarning().noquote()
+            << "[DICOMDecode] Failed to decode DICOM pixel buffer:"
+            << "file=" << filePath
+            << "transferSyntax=" << transferSyntax;
+    }
+    catch (const std::bad_alloc&)
+    {
+        qWarning().noquote()
+            << "[DICOMDecode] Not enough memory while decoding DICOM pixel buffer:"
+            << "file=" << filePath
+            << "transferSyntax=" << transferSyntax;
+    }
+    catch (const std::exception& exception)
+    {
+        qWarning().noquote()
+            << "[DICOMDecode] Exception while decoding DICOM pixel buffer:"
+            << "file=" << filePath
+            << "transferSyntax=" << transferSyntax
+            << "error=" << exception.what();
+    }
+    catch (...)
+    {
+        qWarning().noquote()
+            << "[DICOMDecode] Unknown exception while decoding DICOM pixel buffer:"
+            << "file=" << filePath
+            << "transferSyntax=" << transferSyntax;
+    }
+
+    return false;
+}
+
 FileHandling::PatientList GDCMFileHandling::loadDicomFolder(const QString& folderPath, ProgressCallback progressCallback)
 {
     PatientList patients;
     std::map<QString, PatientPtr> patientMap;
 
-    std::error_code errorCode;
-    const std::filesystem::path rootPath = std::filesystem::path(folderPath.toStdString());
-    if (!std::filesystem::exists(rootPath, errorCode))
-    {
-        return patients;
-    }
-
-    int totalRegularFiles = 0;
-    for (const auto& entry : std::filesystem::recursive_directory_iterator(rootPath, errorCode))
-    {
-        if (errorCode)
-        {
-            break;
-        }
-
-        if (entry.is_regular_file())
-        {
-            ++totalRegularFiles;
-        }
-    }
-    errorCode.clear();
-
-    int processedRegularFiles = 0;
-    for (const auto& entry : std::filesystem::recursive_directory_iterator(rootPath, errorCode))
-    {
-        if (errorCode || !entry.is_regular_file())
-        {
-            continue;
-        }
-
-        ++processedRegularFiles;
-        if (progressCallback)
-        {
-            progressCallback(processedRegularFiles, totalRegularFiles);
-        }
-
-        const QString filePath = QString::fromStdString(entry.path().string());
-        if (!canLoad(filePath))
-        {
-            continue;
-        }
-
-        PatientPtr patient = loadDicomHierarchy(filePath);
-        if (!patient)
-        {
-            continue;
-        }
-
-        auto it = patientMap.find(patient->patientId());
-        if (it == patientMap.end())
-        {
-            patientMap.emplace(patient->patientId(), patient);
-        }
-        else
-        {
-            mergePatientHierarchy(patient, *it->second);
-        }
-    }
+    const std::vector<QString> regularFiles = collectRegularFilesBfs(folderPath);
+    const std::vector<QString> dicomCandidates = filterDicomCandidates(regularFiles);
+    scanDicomCandidatesInBatches(dicomCandidates, patientMap, std::move(progressCallback));
 
     for (const auto& [patientId, patient] : patientMap)
     {
@@ -147,14 +464,183 @@ FileHandling::PatientList GDCMFileHandling::loadDicomFolder(const QString& folde
     return patients;
 }
 
+std::vector<QString> GDCMFileHandling::collectRegularFilesBfs(const QString& folderPath) const
+{
+    std::vector<QString> files;
+
+    std::error_code errorCode;
+    const std::filesystem::path rootPath = toFilesystemPath(folderPath);
+    if (!std::filesystem::exists(rootPath, errorCode) || !std::filesystem::is_directory(rootPath, errorCode))
+    {
+        if (errorCode)
+        {
+            qWarning().noquote() << "[DICOMImport] folder access failed:" << folderPath
+                                 << QString::fromStdString(errorCode.message());
+        }
+        return files;
+    }
+
+    std::queue<std::filesystem::path> pendingDirectories;
+    pendingDirectories.push(rootPath);
+
+    while (!pendingDirectories.empty())
+    {
+        const std::filesystem::path currentDirectory = pendingDirectories.front();
+        pendingDirectories.pop();
+
+        std::error_code iteratorError;
+        std::filesystem::directory_iterator iterator(currentDirectory, iteratorError);
+        if (iteratorError)
+        {
+            qWarning().noquote() << "[DICOMImport] folder traversal stopped:"
+                                 << fromFilesystemPath(currentDirectory)
+                                 << QString::fromStdString(iteratorError.message());
+            return files;
+        }
+
+        const std::filesystem::directory_iterator endIterator;
+        for (; iterator != endIterator; iterator.increment(iteratorError))
+        {
+            if (iteratorError)
+            {
+                qWarning().noquote() << "[DICOMImport] folder traversal stopped:"
+                                     << fromFilesystemPath(currentDirectory)
+                                     << QString::fromStdString(iteratorError.message());
+                return files;
+            }
+
+            std::error_code typeError;
+            if (iterator->is_directory(typeError))
+            {
+                pendingDirectories.push(iterator->path());
+                continue;
+            }
+            if (typeError)
+            {
+                qWarning().noquote() << "[DICOMImport] folder traversal stopped:"
+                                     << fromFilesystemPath(iterator->path())
+                                     << QString::fromStdString(typeError.message());
+                return files;
+            }
+
+            if (iterator->is_regular_file(typeError))
+            {
+                files.push_back(fromFilesystemPath(iterator->path()));
+                continue;
+            }
+            if (typeError)
+            {
+                qWarning().noquote() << "[DICOMImport] folder traversal stopped:"
+                                     << fromFilesystemPath(iterator->path())
+                                     << QString::fromStdString(typeError.message());
+                return files;
+            }
+        }
+    }
+
+    return files;
+}
+
+std::vector<QString> GDCMFileHandling::filterDicomCandidates(const std::vector<QString>& files) const
+{
+    std::vector<QString> candidates;
+    candidates.reserve(files.size());
+    for (const QString& filePath : files)
+    {
+        if (looksLikePart10Dicom(filePath))
+        {
+            candidates.push_back(filePath);
+        }
+    }
+    return candidates;
+}
+
+bool GDCMFileHandling::looksLikePart10Dicom(const QString& filePath) const
+{
+    QFile f(filePath);
+    if (!f.open(QIODevice::ReadOnly))
+    {
+        return false;
+    }
+    const bool result = (f.size() >= 132)
+        && f.seek(128)
+        && (f.read(4) == QByteArray("DICM"));
+    f.close();
+    return result;
+}
+
+void GDCMFileHandling::scanDicomCandidatesInBatches(
+    const std::vector<QString>& candidates,
+    std::map<QString, PatientPtr>& patientMap,
+    ProgressCallback progressCallback) const
+{
+    const int totalCandidates = static_cast<int>(candidates.size());
+    int processedCandidates = 0;
+
+    for (std::size_t batchStart = 0; batchStart < candidates.size(); batchStart += kScannerBatchSize)
+    {
+        const std::size_t batchEnd = std::min(batchStart + kScannerBatchSize, candidates.size());
+
+        gdcm::Scanner scanner;
+        addFolderImportScannerTags(scanner);
+
+        gdcm::Directory::FilenamesType filenames;
+        filenames.reserve(batchEnd - batchStart);
+        for (std::size_t index = batchStart; index < batchEnd; ++index)
+        {
+            filenames.push_back(candidates[index].toStdString());
+        }
+
+        if (!scanGdcmMetadataBatch(scanner, filenames, batchStart, batchEnd))
+        {
+            processedCandidates += static_cast<int>(filenames.size());
+            if (progressCallback)
+            {
+                progressCallback(processedCandidates, totalCandidates);
+            }
+            continue;
+        }
+
+        for (std::size_t batchIndex = 0; batchIndex < filenames.size(); ++batchIndex)
+        {
+            const std::string& scannerPath = filenames[batchIndex];
+            const QString& candidatePath = candidates[batchStart + batchIndex];
+            if (scanner.IsKey(scannerPath.c_str()))
+            {
+                const gdcm::Scanner::TagToValue& tagValues = scanner.GetMapping(scannerPath.c_str());
+                PatientPtr patient = buildHierarchyFromScannedTags(candidatePath, tagValues);
+                if (patient)
+                {
+                    const QString issuerOfPatientId = scannedTagValue(tagValues, kIssuerOfPatientIdTag);
+                    const QString patientKey = patient->patientId() + "|" + issuerOfPatientId;
+                    auto it = patientMap.find(patientKey);
+                    if (it == patientMap.end())
+                    {
+                        patientMap.emplace(patientKey, patient);
+                    }
+                    else
+                    {
+                        mergePatientHierarchy(patient, *it->second);
+                    }
+                }
+            }
+
+            ++processedCandidates;
+            if (progressCallback)
+            {
+                progressCallback(processedCandidates, totalCandidates);
+            }
+        }
+    }
+}
+
 std::unique_ptr<MedicalImage> GDCMFileHandling::loadImage(const QString& filePath)
 {
     gdcm::ImageReader reader;
     reader.SetFileName(filePath.toStdString().c_str());
 
-    if (!reader.Read())
+    if (!readGdcmImageReader(reader, filePath))
     {
-        qDebug() << "Failed to read DICOM file:" << filePath;
         return nullptr;
     }
 
@@ -166,9 +652,8 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadImageData(const QString& fileP
     gdcm::ImageReader reader;
     reader.SetFileName(filePath.toStdString().c_str());
 
-    if (!reader.Read())
+    if (!readGdcmImageReader(reader, filePath))
     {
-        qDebug() << "Failed to read DICOM file:" << filePath;
         return nullptr;
     }
 
@@ -187,9 +672,8 @@ QHash<int, std::shared_ptr<DicomImage>> GDCMFileHandling::loadImageDataFrames(
 
     gdcm::ImageReader reader;
     reader.SetFileName(filePath.toStdString().c_str());
-    if (!reader.Read())
+    if (!readGdcmImageReader(reader, filePath))
     {
-        qDebug() << "Failed to read DICOM file:" << filePath;
         return frames;
     }
 
@@ -224,16 +708,15 @@ QHash<int, std::shared_ptr<DicomImage>> GDCMFileHandling::loadImageDataFrames(
 
 FileHandling::PatientPtr GDCMFileHandling::loadDicomHierarchy(const QString& filePath)
 {
-    gdcm::ImageReader reader;
+    gdcm::Reader reader;
     reader.SetFileName(filePath.toStdString().c_str());
 
-    if (!reader.Read())
+    if (!readGdcmReader(reader, filePath))
     {
-        qDebug() << "Failed to read DICOM hierarchy from file:" << filePath;
         return nullptr;
     }
 
-    return buildHierarchy(filePath, reader);
+    return buildHierarchy(filePath, reader.GetFile());
 }
 
 QStringList GDCMFileHandling::getSupportedFormats() const
@@ -249,15 +732,7 @@ bool GDCMFileHandling::canLoad(const QString& filePath) const
         return false;
     }
 
-    const QString suffix = "*." + info.suffix();
-    if (!info.suffix().isEmpty() && !m_supportedFormats.contains(suffix, Qt::CaseInsensitive))
-    {
-        return false;
-    }
-
-    gdcm::ImageReader reader;
-    reader.SetFileName(filePath.toStdString().c_str());
-    return reader.Read();
+    return looksLikePart10Dicom(filePath);
 }
 
 void GDCMFileHandling::mergePatientHierarchy(const PatientPtr& sourcePatient, Patient& targetPatient) const
@@ -422,12 +897,9 @@ bool GDCMFileHandling::decodePixelBuffer(
     try
     {
         decodedBuffer.resize(static_cast<qsizetype>(bufferLength));
-        if (!gdcmImage.GetBuffer(decodedBuffer.data()))
+        const QString transferSyntax = transferSyntaxUid(reader);
+        if (!getGdcmImageBuffer(gdcmImage, decodedBuffer.data(), filePath, transferSyntax))
         {
-            qWarning().noquote()
-                << "[DICOMDecode] Failed to decode DICOM pixel buffer:"
-                << "file=" << filePath
-                << "transferSyntax=" << transferSyntaxUid(reader);
             decodedBuffer.clear();
             return false;
         }
@@ -456,17 +928,17 @@ bool GDCMFileHandling::decodePixelBuffer(
     return true;
 }
 
-std::shared_ptr<DicomInstanceMetadata> GDCMFileHandling::extractDicomInstanceMetadata(const gdcm::ImageReader& reader) const
+std::shared_ptr<DicomInstanceMetadata> GDCMFileHandling::extractDicomInstanceMetadata(const gdcm::File& file) const
 {
-    const gdcm::Image& gdcmImage = reader.GetImage();
-    const unsigned int width = gdcmImage.GetDimensions()[0];
-    const unsigned int height = gdcmImage.GetDimensions()[1];
-    const unsigned int samplesPerPixel = gdcmImage.GetPixelFormat().GetSamplesPerPixel();
-    const unsigned int bitsAllocated = gdcmImage.GetPixelFormat().GetBitsAllocated();
-    const bool isSignedPixelData = gdcmImage.GetPixelFormat().GetPixelRepresentation() != 0;
-
     gdcm::StringFilter stringFilter;
-    stringFilter.SetFile(reader.GetFile());
+    stringFilter.SetFile(file);
+
+    const auto readUnsignedIntTagValue = [this, &stringFilter](uint16_t group, uint16_t element) {
+        const QString tagValue = readStringTag(stringFilter, group, element);
+        bool ok = false;
+        const uint value = tagValue.split('\\').value(0).trimmed().toUInt(&ok);
+        return ok ? value : 0U;
+    };
 
     const auto readOptionalNumericTagValue = [this, &stringFilter](uint16_t group, uint16_t element) {
         const QString tagValue = readStringTag(stringFilter, group, element);
@@ -611,6 +1083,13 @@ std::shared_ptr<DicomInstanceMetadata> GDCMFileHandling::extractDicomInstanceMet
         return std::pair<bool, std::array<double, 6>>(allValid, values);
     };
 
+    const unsigned int width = readUnsignedIntTagValue(0x0028, 0x0011);
+    const unsigned int height = readUnsignedIntTagValue(0x0028, 0x0010);
+    const unsigned int samplesPerPixel = readUnsignedIntTagValue(0x0028, 0x0002);
+    const unsigned int bitsAllocated = readUnsignedIntTagValue(0x0028, 0x0100);
+    const unsigned int bitsStored = readUnsignedIntTagValue(0x0028, 0x0101);
+    const unsigned int highBit = readUnsignedIntTagValue(0x0028, 0x0102);
+    const bool isSignedPixelData = readUnsignedIntTagValue(0x0028, 0x0103) != 0;
     const int numberOfFrames = std::max(1, readStringTag(stringFilter, 0x0028, 0x0008).trimmed().toInt());
     const auto [hasRescaleSlope, rescaleSlope] = readOptionalNumericTagValue(0x0028, 0x1053);
     const auto [hasRescaleIntercept, rescaleIntercept] = readOptionalNumericTagValue(0x0028, 0x1052);
@@ -678,10 +1157,10 @@ std::shared_ptr<DicomInstanceMetadata> GDCMFileHandling::extractDicomInstanceMet
     metadata->frameIntervalMs = frameIntervalMs;
     metadata->frameTimeVectorMs = frameTimeVectorMs;
     metadata->bitsAllocated = static_cast<int>(bitsAllocated);
-    metadata->bitsStored = static_cast<int>(gdcmImage.GetPixelFormat().GetBitsStored());
-    metadata->highBit = static_cast<int>(gdcmImage.GetPixelFormat().GetHighBit());
+    metadata->bitsStored = static_cast<int>(bitsStored);
+    metadata->highBit = static_cast<int>(highBit);
     metadata->pixelRepresentation = isSignedPixelData ? 1 : 0;
-    metadata->transferSyntaxUid = transferSyntaxUid(reader);
+    metadata->transferSyntaxUid = transferSyntaxUid(file);
     metadata->photometricInterpretation = readStringTag(stringFilter, 0x0028, 0x0004);
     metadata->rescaleType = readStringTag(stringFilter, 0x0028, 0x1054);
     metadata->voiLutFunction = readStringTag(stringFilter, 0x0028, 0x1056);
@@ -720,6 +1199,26 @@ std::shared_ptr<DicomInstanceMetadata> GDCMFileHandling::extractDicomInstanceMet
     metadata->hasGantryDetectorTilt = hasGantryDetectorTilt;
     metadata->gantryDetectorTilt = gantryDetectorTilt;
 
+    return metadata;
+}
+
+std::shared_ptr<DicomInstanceMetadata> GDCMFileHandling::extractDicomInstanceMetadata(const gdcm::ImageReader& reader) const
+{
+    std::shared_ptr<DicomInstanceMetadata> metadata = extractDicomInstanceMetadata(reader.GetFile());
+    if (!metadata)
+    {
+        return nullptr;
+    }
+
+    const gdcm::Image& gdcmImage = reader.GetImage();
+    metadata->columns = static_cast<int>(gdcmImage.GetDimensions()[0]);
+    metadata->rows = static_cast<int>(gdcmImage.GetDimensions()[1]);
+    metadata->samplesPerPixel = static_cast<int>(gdcmImage.GetPixelFormat().GetSamplesPerPixel());
+    metadata->bitsAllocated = static_cast<int>(gdcmImage.GetPixelFormat().GetBitsAllocated());
+    metadata->bitsStored = static_cast<int>(gdcmImage.GetPixelFormat().GetBitsStored());
+    metadata->highBit = static_cast<int>(gdcmImage.GetPixelFormat().GetHighBit());
+    metadata->pixelRepresentation = gdcmImage.GetPixelFormat().GetPixelRepresentation() != 0 ? 1 : 0;
+    metadata->transferSyntaxUid = transferSyntaxUid(reader);
     return metadata;
 }
 
@@ -786,8 +1285,36 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(
     const int numberOfFrames = metadata ? std::max(1, metadata->numberOfFrames) : 1;
     const int selectedFrameIndex = std::clamp(frameIndex, 0, numberOfFrames - 1);
     const qsizetype frameByteCount = expectedFrameByteCount(width, height, std::max(1U, samplesPerPixel), bitsAllocated);
+    if (frameByteCount <= 0)
+    {
+        qWarning().noquote()
+            << "[DICOMDecode] Invalid decoded frame size:"
+            << "file=" << filePath
+            << "frame=" << selectedFrameIndex
+            << "frames=" << numberOfFrames
+            << "frameBytes=" << frameByteCount
+            << "bufferBytes=" << buffer->size()
+            << "transferSyntax=" << transferSyntaxUid(reader);
+        return nullptr;
+    }
+    if (selectedFrameIndex > 0 &&
+        frameByteCount > std::numeric_limits<qsizetype>::max() / selectedFrameIndex)
+    {
+        qWarning().noquote()
+            << "[DICOMDecode] Frame offset overflow:"
+            << "file=" << filePath
+            << "frame=" << selectedFrameIndex
+            << "frames=" << numberOfFrames
+            << "frameBytes=" << frameByteCount
+            << "bufferBytes=" << buffer->size()
+            << "transferSyntax=" << transferSyntaxUid(reader);
+        return nullptr;
+    }
+
     const qsizetype frameOffset = frameByteCount * selectedFrameIndex;
-    if (frameByteCount <= 0 || frameOffset < 0 || frameOffset + frameByteCount > buffer->size())
+    if (frameOffset < 0 ||
+        frameOffset > std::numeric_limits<qsizetype>::max() - frameByteCount ||
+        frameOffset + frameByteCount > buffer->size())
     {
         qWarning().noquote()
             << "[DICOMDecode] Decoded buffer does not contain the requested frame:"
@@ -800,6 +1327,28 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(
         return nullptr;
     }
     const char* frameData = buffer->constData() + frameOffset;
+
+    constexpr quint64 maxInt = static_cast<quint64>(std::numeric_limits<int>::max());
+    const quint64 width64 = static_cast<quint64>(width);
+    const quint64 height64 = static_cast<quint64>(height);
+    const quint64 pixelCount64 = width64 * height64;
+    if (width64 == 0 ||
+        height64 == 0 ||
+        width64 > maxInt ||
+        height64 > maxInt ||
+        pixelCount64 == 0 ||
+        pixelCount64 > maxInt)
+    {
+        qWarning().noquote()
+            << "[DICOMDecode] Image dimensions out of range:"
+            << "file=" << filePath
+            << "size=" << QStringLiteral("%1x%2").arg(width).arg(height)
+            << "transferSyntax=" << transferSyntaxUid(reader);
+        return nullptr;
+    }
+    const int imageWidth = static_cast<int>(width);
+    const int imageHeight = static_cast<int>(height);
+    const int pixelCount = static_cast<int>(pixelCount64);
 
     const auto readNumericTagValue = [this, &stringFilter](uint16_t group, uint16_t element, double fallbackValue) {
         const QString tagValue = readStringTag(stringFilter, group, element);
@@ -824,11 +1373,22 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(
     const double appliedRescaleIntercept = metadata && metadata->hasRescaleIntercept ? metadata->rescaleIntercept : 0.0;
     if (samplesPerPixel == 3 && bitsAllocated <= 8)
     {
+        const quint64 rgbBytesPerLine64 = static_cast<quint64>(width) * 3U;
+        if (rgbBytesPerLine64 > maxInt)
+        {
+            qWarning().noquote()
+                << "[DICOMDecode] RGB bytes-per-line out of range:"
+                << "file=" << filePath
+                << "width=" << width
+                << "transferSyntax=" << transferSyntaxUid(reader);
+            return nullptr;
+        }
+
         image = QImage(
                     reinterpret_cast<const uchar*>(frameData),
-                    static_cast<int>(width),
-                    static_cast<int>(height),
-                    static_cast<int>(width) * 3,
+                    imageWidth,
+                    imageHeight,
+                    static_cast<int>(rgbBytesPerLine64),
                     QImage::Format_RGB888)
                     .rgbSwapped()
                     .copy();
@@ -838,13 +1398,12 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(
         isMonochromeImage = true;
         image = QImage(
                     reinterpret_cast<const uchar*>(frameData),
-                    static_cast<int>(width),
-                    static_cast<int>(height),
-                    static_cast<int>(width),
+                    imageWidth,
+                    imageHeight,
+                    imageWidth,
                     QImage::Format_Grayscale8)
                     .copy();
 
-        const int pixelCount = static_cast<int>(width * height);
         rawPixels.resize(static_cast<std::size_t>(pixelCount));
         minimumStoredValue = std::numeric_limits<int>::max();
         maximumStoredValue = std::numeric_limits<int>::min();
@@ -860,34 +1419,68 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(
     else if (samplesPerPixel == 1 && bitsAllocated <= 16)
     {
         isMonochromeImage = true;
-        image = QImage(static_cast<int>(width), static_cast<int>(height), QImage::Format_Grayscale8);
+        image = QImage(imageWidth, imageHeight, QImage::Format_Grayscale8);
 
-        const int pixelCount = static_cast<int>(width * height);
         minimumStoredValue = std::numeric_limits<int>::max();
         maximumStoredValue = std::numeric_limits<int>::min();
         rawPixels.resize(static_cast<std::size_t>(pixelCount));
+        const auto storePixel = [&](int index, int storedValue) {
+            const int value = static_cast<int>(
+                std::lround((static_cast<double>(storedValue) * appliedRescaleSlope) + appliedRescaleIntercept));
+            const int clampedValue = std::clamp(value, -32768, 32767);
+            rawPixels[static_cast<std::size_t>(index)] = static_cast<int16_t>(clampedValue);
+            minimumStoredValue = std::min(minimumStoredValue, clampedValue);
+            maximumStoredValue = std::max(maximumStoredValue, clampedValue);
+        };
+
+        const bool isAligned =
+            reinterpret_cast<std::uintptr_t>(frameData) % alignof(uint16_t) == 0;
+        if (!isAligned)
+        {
+            qWarning().noquote()
+                << "[DICOMDecode] Unaligned 16-bit pixel buffer, using safe copy path:"
+                << "file=" << filePath
+                << "transferSyntax=" << transferSyntaxUid(reader);
+        }
+
         if (isSignedPixelData)
         {
-            const auto* pixelData = reinterpret_cast<const int16_t*>(frameData);
-            for (int index = 0; index < pixelCount; ++index)
+            if (isAligned)
             {
-                const int value = static_cast<int>(std::lround((static_cast<double>(pixelData[index]) * appliedRescaleSlope) + appliedRescaleIntercept));
-                const int clampedValue = std::clamp(value, -32768, 32767);
-                rawPixels[static_cast<std::size_t>(index)] = static_cast<int16_t>(clampedValue);
-                minimumStoredValue = std::min(minimumStoredValue, clampedValue);
-                maximumStoredValue = std::max(maximumStoredValue, clampedValue);
+                const auto* pixelData = reinterpret_cast<const int16_t*>(frameData);
+                for (int index = 0; index < pixelCount; ++index)
+                {
+                    storePixel(index, static_cast<int>(pixelData[index]));
+                }
+            }
+            else
+            {
+                for (int index = 0; index < pixelCount; ++index)
+                {
+                    int16_t storedValue = 0;
+                    std::memcpy(&storedValue, frameData + (static_cast<std::size_t>(index) * sizeof(storedValue)), sizeof(storedValue));
+                    storePixel(index, static_cast<int>(storedValue));
+                }
             }
         }
         else
         {
-            const auto* pixelData = reinterpret_cast<const uint16_t*>(frameData);
-            for (int index = 0; index < pixelCount; ++index)
+            if (isAligned)
             {
-                const int value = static_cast<int>(std::lround((static_cast<double>(pixelData[index]) * appliedRescaleSlope) + appliedRescaleIntercept));
-                const int clampedValue = std::clamp(value, -32768, 32767);
-                rawPixels[static_cast<std::size_t>(index)] = static_cast<int16_t>(clampedValue);
-                minimumStoredValue = std::min(minimumStoredValue, clampedValue);
-                maximumStoredValue = std::max(maximumStoredValue, clampedValue);
+                const auto* pixelData = reinterpret_cast<const uint16_t*>(frameData);
+                for (int index = 0; index < pixelCount; ++index)
+                {
+                    storePixel(index, static_cast<int>(pixelData[index]));
+                }
+            }
+            else
+            {
+                for (int index = 0; index < pixelCount; ++index)
+                {
+                    uint16_t storedValue = 0;
+                    std::memcpy(&storedValue, frameData + (static_cast<std::size_t>(index) * sizeof(storedValue)), sizeof(storedValue));
+                    storePixel(index, static_cast<int>(storedValue));
+                }
             }
         }
 
@@ -904,15 +1497,12 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(
     }
     else
     {
-         qDebug() << "Unsupported DICOM pixel format for:" << filePath
-                    << "samplesPerPixel=" << samplesPerPixel
-                     << "bitsAllocated=" << bitsAllocated;
         return nullptr;
     }
 
     auto dicomImage = std::make_unique<DicomImage>();
     dicomImage->setFilePath(filePath);
-    dicomImage->setDimensions(static_cast<int>(width), static_cast<int>(height));
+    dicomImage->setDimensions(imageWidth, imageHeight);
     applyMetadataToDicomImage(*dicomImage, metadata, selectedFrameIndex);
 
     if (isMonochromeImage && !rawPixels.empty())
@@ -958,9 +1548,9 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadDicomImage(
 
 std::unique_ptr<DicomImage> GDCMFileHandling::createMetadataOnlyDicomImage(
     const QString& filePath,
-    const gdcm::ImageReader& reader) const
+    const gdcm::File& file) const
 {
-    const std::shared_ptr<DicomInstanceMetadata> metadata = extractDicomInstanceMetadata(reader);
+    const std::shared_ptr<DicomInstanceMetadata> metadata = extractDicomInstanceMetadata(file);
     if (!metadata)
     {
         return nullptr;
@@ -986,10 +1576,17 @@ std::unique_ptr<DicomImage> GDCMFileHandling::createMetadataOnlyDicomImage(
     return dicomImage;
 }
 
-FileHandling::PatientPtr GDCMFileHandling::buildHierarchy(const QString& filePath, const gdcm::ImageReader& reader) const
+std::unique_ptr<DicomImage> GDCMFileHandling::createMetadataOnlyDicomImage(
+    const QString& filePath,
+    const gdcm::ImageReader& reader) const
+{
+    return createMetadataOnlyDicomImage(filePath, reader.GetFile());
+}
+
+FileHandling::PatientPtr GDCMFileHandling::buildHierarchy(const QString& filePath, const gdcm::File& file) const
 {
     gdcm::StringFilter stringFilter;
-    stringFilter.SetFile(reader.GetFile());
+    stringFilter.SetFile(file);
 
     auto patient = std::make_shared<Patient>();
     patient->setPatientId(readStringTag(stringFilter, 0x0010, 0x0020));
@@ -1024,7 +1621,7 @@ FileHandling::PatientPtr GDCMFileHandling::buildHierarchy(const QString& filePat
     series.setModality(readStringTag(stringFilter, 0x0008, 0x0060));
     series.setSeriesNumber(readStringTag(stringFilter, 0x0020, 0x0011));
 
-    std::unique_ptr<DicomImage> dicomImage = createMetadataOnlyDicomImage(filePath, reader);
+    std::unique_ptr<DicomImage> dicomImage = createMetadataOnlyDicomImage(filePath, file);
     if (dicomImage)
     {
         if (series.representativeFilePath().isEmpty())
@@ -1033,6 +1630,91 @@ FileHandling::PatientPtr GDCMFileHandling::buildHierarchy(const QString& filePat
         }
         series.addImage(std::move(dicomImage));
     }
+
+    return patient;
+}
+
+FileHandling::PatientPtr GDCMFileHandling::buildHierarchy(const QString& filePath, const gdcm::ImageReader& reader) const
+{
+    return buildHierarchy(filePath, reader.GetFile());
+}
+
+FileHandling::PatientPtr GDCMFileHandling::buildHierarchyFromScannedTags(
+    const QString& filePath,
+    const gdcm::Scanner::TagToValue& tagValues) const
+{
+    auto patientMetadata = std::make_shared<DicomPatientMetadata>();
+    patientMetadata->patientId = scannedTagValue(tagValues, kPatientIdTag);
+    patientMetadata->patientName = scannedTagValue(tagValues, kPatientNameTag);
+    patientMetadata->patientSex = scannedTagValue(tagValues, kPatientSexTag);
+    patientMetadata->patientBirthDate = normalizeDicomDate(scannedTagValue(tagValues, kPatientBirthDateTag));
+    if (patientMetadata->patientId.isEmpty())
+    {
+        patientMetadata->patientId = QStringLiteral("UNKNOWN_PATIENT");
+    }
+
+    auto patient = std::make_shared<Patient>();
+    patient->setPatientId(patientMetadata->patientId);
+    patient->setPatientName(patientMetadata->patientName);
+    patient->setPatientSex(patientMetadata->patientSex);
+    patient->setDateOfBirth(patientMetadata->patientBirthDate);
+
+    auto studyMetadata = std::make_shared<DicomStudyMetadata>();
+    studyMetadata->patient = patientMetadata;
+    studyMetadata->studyInstanceUid = scannedTagValue(tagValues, kStudyInstanceUidTag);
+    if (studyMetadata->studyInstanceUid.isEmpty())
+    {
+        studyMetadata->studyInstanceUid = patientMetadata->patientId + QStringLiteral("_STUDY");
+    }
+    studyMetadata->studyDate = normalizeDicomDate(scannedTagValue(tagValues, kStudyDateTag));
+    studyMetadata->studyDescription = scannedTagValue(tagValues, kStudyDescriptionTag);
+    studyMetadata->referringPhysicianName = scannedTagValue(tagValues, kReferringPhysicianTag);
+
+    Study& study = patient->getOrCreateStudy(studyMetadata->studyInstanceUid);
+    study.setStudyDescription(studyMetadata->studyDescription);
+    study.setStudyDate(studyMetadata->studyDate);
+    study.setDoctorName(studyMetadata->referringPhysicianName);
+
+    auto seriesMetadata = std::make_shared<DicomSeriesMetadata>();
+    seriesMetadata->study = studyMetadata;
+    seriesMetadata->seriesInstanceUid = scannedTagValue(tagValues, kSeriesInstanceUidTag);
+    if (seriesMetadata->seriesInstanceUid.isEmpty())
+    {
+        seriesMetadata->seriesInstanceUid = studyMetadata->studyInstanceUid + QStringLiteral("_SERIES");
+    }
+    seriesMetadata->seriesDescription = scannedTagValue(tagValues, kSeriesDescriptionTag);
+    seriesMetadata->seriesNumber = scannedTagValue(tagValues, kSeriesNumberTag);
+    seriesMetadata->modality = scannedTagValue(tagValues, kModalityTag);
+
+    Series& series = study.getOrCreateSeries(seriesMetadata->seriesInstanceUid);
+    series.setSeriesDescription(seriesMetadata->seriesDescription);
+    series.setModality(seriesMetadata->modality);
+    series.setSeriesNumber(seriesMetadata->seriesNumber);
+    if (series.representativeFilePath().isEmpty())
+    {
+        series.setRepresentativeFilePath(filePath);
+    }
+
+    auto instanceMetadata = std::make_shared<DicomInstanceMetadata>();
+    instanceMetadata->series = seriesMetadata;
+    instanceMetadata->sopInstanceUid = scannedTagValue(tagValues, kSopInstanceUidTag);
+    if (instanceMetadata->sopInstanceUid.isEmpty())
+    {
+        instanceMetadata->sopInstanceUid = QFileInfo(filePath).completeBaseName();
+    }
+    instanceMetadata->instanceNumber = scannedTagValue(tagValues, kInstanceNumberTag);
+    instanceMetadata->numberOfFrames = std::max(1, scannedPositiveInt(tagValues, kNumberOfFramesTag, 1));
+    instanceMetadata->rows = scannedPositiveInt(tagValues, kRowsTag);
+    instanceMetadata->columns = scannedPositiveInt(tagValues, kColumnsTag);
+
+    auto dicomImage = std::make_unique<DicomImage>();
+    dicomImage->setFilePath(filePath);
+    dicomImage->setMetadata(instanceMetadata);
+    dicomImage->setSopInstanceUid(instanceMetadata->sopInstanceUid);
+    dicomImage->setInstanceNumber(instanceMetadata->instanceNumber);
+    dicomImage->setDimensions(instanceMetadata->columns, instanceMetadata->rows);
+    dicomImage->setFrameCount(instanceMetadata->numberOfFrames);
+    series.addImage(std::move(dicomImage));
 
     return patient;
 }

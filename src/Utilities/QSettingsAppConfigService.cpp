@@ -1,12 +1,10 @@
 #include "Utilities/QSettingsAppConfigService.h"
 
+#include "Utilities/ApplicationPaths.h"
+
 #include <QByteArray>
-#include <QCoreApplication>
-#include <QDir>
-#include <QFileInfo>
 #include <QProcessEnvironment>
 #include <QSettings>
-#include <QStandardPaths>
 
 namespace
 {
@@ -159,13 +157,7 @@ QString QSettingsAppConfigService::configFilePath() const
 
 QString QSettingsAppConfigService::defaultDatabaseFilePath() const
 {
-    QString appDataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    if (appDataPath.trimmed().isEmpty())
-    {
-        appDataPath = QDir(QCoreApplication::applicationDirPath()).filePath("data");
-    }
-
-    return QDir(appDataPath).filePath("dicomviewer.sqlite");
+    return ApplicationPaths::databaseFilePath();
 }
 
 QVariant QSettingsAppConfigService::readValue(const QString& group, const QString& key, const QVariant& defaultValue) const
@@ -191,5 +183,5 @@ QString QSettingsAppConfigService::environmentOverrideKey(const QString& group, 
 
 QString QSettingsAppConfigService::resolveConfigFilePath() const
 {
-    return QDir(QCoreApplication::applicationDirPath()).filePath("config.ini");
+    return ApplicationPaths::configFilePath();
 }

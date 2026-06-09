@@ -96,6 +96,25 @@ QString defaultAnnotationLabel(MeasurementType type)
     return QString("%1 annotation").arg(measurementTypeDisplayName(type));
 }
 
+QByteArray encodePreviewPixmap(const QPixmap& pixmap)
+{
+    QByteArray previewPng;
+    if (pixmap.isNull())
+    {
+        return previewPng;
+    }
+
+    QBuffer buffer(&previewPng);
+    buffer.open(QIODevice::WriteOnly);
+    pixmap.save(&buffer, "PNG");
+    return previewPng;
+}
+
+QVariant nullableBlob(const QByteArray& value)
+{
+    return value.isEmpty() ? QVariant(QMetaType(QMetaType::QByteArray)) : QVariant(value);
+}
+
 QString reportDisplayValue(const QSqlQuery& query, MeasurementType type)
 {
     switch (type)
@@ -1020,7 +1039,9 @@ DicomPreviewItems SqliteService::getStudyPreviewItemsForPatient(const QString& p
         "COUNT(se.series_instance_uid) AS series_count, "
         "(SELECT se2.preview_png "
         " FROM series se2 "
-        " WHERE se2.study_instance_uid = st.study_instance_uid AND se2.preview_png IS NOT NULL "
+        " WHERE se2.study_instance_uid = st.study_instance_uid "
+        " AND se2.preview_png IS NOT NULL "
+        " AND length(se2.preview_png) > 0 "
         " ORDER BY se2.series_number, se2.series_instance_uid "
         " LIMIT 1) AS preview_png "
         "FROM studies st "
@@ -1108,6 +1129,37 @@ DicomPreviewItems SqliteService::getSeriesPreviewItemsForStudy(const QString& st
     }
 
     return items;
+}
+
+bool SqliteService::upsertSeriesPreview(const QString& seriesInstanceUid, const QPixmap& previewPixmap)
+{
+    const QString normalizedSeriesUid = seriesInstanceUid.trimmed();
+    if (normalizedSeriesUid.isEmpty() || previewPixmap.isNull() || !ensureConnection())
+    {
+        return false;
+    }
+
+    const QByteArray previewPng = encodePreviewPixmap(previewPixmap);
+    if (previewPng.isEmpty())
+    {
+        return false;
+    }
+
+    QSqlQuery query(m_connection->database());
+    query.prepare(
+        "UPDATE series "
+        "SET preview_png = :preview_png "
+        "WHERE series_instance_uid = :series_instance_uid");
+    query.bindValue(":preview_png", previewPng);
+    query.bindValue(":series_instance_uid", normalizedSeriesUid);
+
+    if (!query.exec())
+    {
+        qWarning() << "Failed to save series preview:" << query.lastError().text();
+        return false;
+    }
+
+    return query.numRowsAffected() > 0;
 }
 
 bool SqliteService::ensureConnection()
@@ -1356,31 +1408,27 @@ bool SqliteService::saveStudy(const QString& patientId, const Study& study)
 
 bool SqliteService::saveSeries(const QString& studyInstanceUid, const Series& series)
 {
-    QByteArray previewPng;
-    const QPixmap previewPixmap = createSeriesPreviewPixmap(series);
-    if (!previewPixmap.isNull())
-    {
-        QBuffer buffer(&previewPng);
-        buffer.open(QIODevice::WriteOnly);
-        previewPixmap.save(&buffer, "PNG");
-    }
+    const QByteArray previewPng = encodePreviewPixmap(createSeriesPreviewPixmap(series));
 
     QSqlQuery query(m_connection->database());
+    const QString previewUpdateClause =
+        previewPng.isEmpty() ? QString() : QString(", preview_png = EXCLUDED.preview_png");
     query.prepare(
-        "INSERT INTO series (series_instance_uid, study_instance_uid, series_description, modality, series_number, preview_png) "
-        "VALUES (:series_instance_uid, :study_instance_uid, :series_description, :modality, :series_number, :preview_png) "
-        "ON CONFLICT (series_instance_uid) DO UPDATE SET "
-        "study_instance_uid = EXCLUDED.study_instance_uid, "
-        "series_description = EXCLUDED.series_description, "
-        "modality = EXCLUDED.modality, "
-        "series_number = EXCLUDED.series_number, "
-        "preview_png = EXCLUDED.preview_png");
+        QStringLiteral(
+            "INSERT INTO series (series_instance_uid, study_instance_uid, series_description, modality, series_number, preview_png) "
+            "VALUES (:series_instance_uid, :study_instance_uid, :series_description, :modality, :series_number, :preview_png) "
+            "ON CONFLICT (series_instance_uid) DO UPDATE SET "
+            "study_instance_uid = EXCLUDED.study_instance_uid, "
+            "series_description = EXCLUDED.series_description, "
+            "modality = EXCLUDED.modality, "
+            "series_number = EXCLUDED.series_number")
+        + previewUpdateClause);
     query.bindValue(":series_instance_uid", series.seriesInstanceUid());
     query.bindValue(":study_instance_uid", studyInstanceUid);
     query.bindValue(":series_description", series.seriesDescription());
     query.bindValue(":modality", series.modality());
     query.bindValue(":series_number", series.seriesNumber());
-    query.bindValue(":preview_png", previewPng);
+    query.bindValue(":preview_png", nullableBlob(previewPng));
 
     if (!query.exec())
     {

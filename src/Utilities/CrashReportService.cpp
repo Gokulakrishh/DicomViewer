@@ -1,14 +1,13 @@
 #include "Utilities/CrashReportService.h"
 
 #include "AppVersion.h"
+#include "Utilities/ApplicationPaths.h"
 
-#include <QCoreApplication>
 #include <QDateTime>
 #include <QDebug>
 #include <QDir>
 #include <QFile>
 #include <QMessageLogContext>
-#include <QStandardPaths>
 #include <QTextStream>
 
 #include <array>
@@ -27,6 +26,17 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#if defined(__has_include)
+#if __has_include(<dbghelp.h>)
+#define CROSSAXIAL_HAS_DBGHELP 1
+#include <dbghelp.h>
+#else
+#define CROSSAXIAL_HAS_DBGHELP 0
+#endif
+#else
+#define CROSSAXIAL_HAS_DBGHELP 1
+#include <dbghelp.h>
+#endif
 #else
 #include <unistd.h>
 #endif
@@ -42,18 +52,6 @@ QString g_applicationLogPath;
 QString g_crashReportDirectory;
 std::array<char, kMaxStoredPathLength> g_crashDirectoryBytes{};
 std::array<char, kMaxStoredPathLength> g_applicationLogPathBytes{};
-
-QString applicationDataRoot()
-{
-    QString appDataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    if (appDataPath.trimmed().isEmpty())
-    {
-        appDataPath = QDir(QCoreApplication::applicationDirPath()).filePath("diagnostics");
-    }
-
-    QDir().mkpath(appDataPath);
-    return appDataPath;
-}
 
 void storePathForCrashHandler(const QString& path, std::array<char, kMaxStoredPathLength>& target)
 {
@@ -150,7 +148,7 @@ unsigned long currentProcessId()
 void utcTimestamp(char* buffer, std::size_t bufferSize)
 {
     const std::time_t now = std::time(nullptr);
-#if defined(Q_OS_WIN)
+#if defined(Q_OS_WIN) && defined(_MSC_VER)
     std::tm utcTime{};
     gmtime_s(&utcTime, &now);
     std::strftime(buffer, bufferSize, "%Y%m%d-%H%M%S", &utcTime);
@@ -161,7 +159,152 @@ void utcTimestamp(char* buffer, std::size_t bufferSize)
 #endif
 }
 
-void writeCrashReport(const char* reason, const char* detail)
+[[noreturn]] void exitImmediately(int code)
+{
+#if defined(Q_OS_WIN)
+    TerminateProcess(GetCurrentProcess(), static_cast<UINT>(code));
+    std::abort();
+#else
+    std::_Exit(code);
+#endif
+}
+
+#if defined(Q_OS_WIN)
+const char* windowsExceptionName(unsigned long exceptionCode)
+{
+    switch (exceptionCode)
+    {
+    case EXCEPTION_ACCESS_VIOLATION:
+        return "access_violation";
+    case EXCEPTION_ARRAY_BOUNDS_EXCEEDED:
+        return "array_bounds_exceeded";
+    case EXCEPTION_DATATYPE_MISALIGNMENT:
+        return "datatype_misalignment";
+    case EXCEPTION_FLT_DIVIDE_BY_ZERO:
+        return "float_divide_by_zero";
+    case EXCEPTION_ILLEGAL_INSTRUCTION:
+        return "illegal_instruction";
+    case EXCEPTION_INT_DIVIDE_BY_ZERO:
+        return "integer_divide_by_zero";
+    case EXCEPTION_IN_PAGE_ERROR:
+        return "in_page_error";
+    case EXCEPTION_STACK_OVERFLOW:
+        return "stack_overflow";
+    default:
+        return "unknown";
+    }
+}
+
+void modulePathForAddress(void* address, char* buffer, std::size_t bufferSize)
+{
+    if (!address || !buffer || bufferSize == 0)
+    {
+        return;
+    }
+
+    HMODULE moduleHandle = nullptr;
+    if (!GetModuleHandleExA(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCSTR>(address),
+            &moduleHandle))
+    {
+        return;
+    }
+
+    GetModuleFileNameA(moduleHandle, buffer, static_cast<DWORD>(bufferSize));
+}
+
+bool writeWindowsMiniDump(EXCEPTION_POINTERS* exceptionPointers, const char* timestamp, char* dumpPath, std::size_t dumpPathSize)
+{
+    if (!exceptionPointers || !timestamp || !dumpPath || dumpPathSize == 0)
+    {
+        return false;
+    }
+
+#if CROSSAXIAL_HAS_DBGHELP
+    std::snprintf(
+        dumpPath,
+        dumpPathSize,
+        "%s\\crash-%s-%lu.dmp",
+        g_crashDirectoryBytes.data(),
+        timestamp,
+        currentProcessId());
+
+    HANDLE dumpFile = CreateFileA(dumpPath, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (dumpFile == INVALID_HANDLE_VALUE)
+    {
+        dumpPath[0] = '\0';
+        return false;
+    }
+
+    HMODULE dbgHelpModule = LoadLibraryA("dbghelp.dll");
+    if (!dbgHelpModule)
+    {
+        CloseHandle(dumpFile);
+        DeleteFileA(dumpPath);
+        dumpPath[0] = '\0';
+        return false;
+    }
+
+    using MiniDumpWriteDumpFunction = BOOL(WINAPI*)(
+        HANDLE,
+        DWORD,
+        HANDLE,
+        MINIDUMP_TYPE,
+        PMINIDUMP_EXCEPTION_INFORMATION,
+        PMINIDUMP_USER_STREAM_INFORMATION,
+        PMINIDUMP_CALLBACK_INFORMATION);
+
+    const auto miniDumpWriteDump = reinterpret_cast<MiniDumpWriteDumpFunction>(
+        GetProcAddress(dbgHelpModule, "MiniDumpWriteDump"));
+    if (!miniDumpWriteDump)
+    {
+        FreeLibrary(dbgHelpModule);
+        CloseHandle(dumpFile);
+        DeleteFileA(dumpPath);
+        dumpPath[0] = '\0';
+        return false;
+    }
+
+    MINIDUMP_EXCEPTION_INFORMATION exceptionInfo{};
+    exceptionInfo.ThreadId = GetCurrentThreadId();
+    exceptionInfo.ExceptionPointers = exceptionPointers;
+    exceptionInfo.ClientPointers = FALSE;
+
+    const BOOL success = miniDumpWriteDump(
+        GetCurrentProcess(),
+        GetCurrentProcessId(),
+        dumpFile,
+        MiniDumpNormal,
+        &exceptionInfo,
+        nullptr,
+        nullptr);
+
+    FreeLibrary(dbgHelpModule);
+    CloseHandle(dumpFile);
+    if (!success)
+    {
+        DeleteFileA(dumpPath);
+        dumpPath[0] = '\0';
+        return false;
+    }
+
+    return true;
+#else
+    dumpPath[0] = '\0';
+    return false;
+#endif
+}
+#endif
+
+void writeCrashReport(
+    const char* reason,
+    const char* detail
+#if defined(Q_OS_WIN)
+    ,
+    EXCEPTION_POINTERS* exceptionPointers = nullptr
+#endif
+)
 {
     bool expected = false;
     if (!g_crashReportInProgress.compare_exchange_strong(expected, true))
@@ -191,6 +334,11 @@ void writeCrashReport(const char* reason, const char* detail)
         currentProcessId());
 #endif
 
+#if defined(Q_OS_WIN)
+    char minidumpPath[kMaxStoredPathLength]{};
+    const bool minidumpWritten = writeWindowsMiniDump(exceptionPointers, timestamp, minidumpPath, sizeof(minidumpPath));
+#endif
+
     std::FILE* file = std::fopen(path, "ab");
     if (!file)
     {
@@ -206,6 +354,28 @@ void writeCrashReport(const char* reason, const char* detail)
     {
         std::fprintf(file, "Detail: %s\n", detail);
     }
+#if defined(Q_OS_WIN)
+    if (exceptionPointers && exceptionPointers->ExceptionRecord)
+    {
+        char modulePath[kMaxStoredPathLength]{};
+        modulePathForAddress(
+            exceptionPointers->ExceptionRecord->ExceptionAddress,
+            modulePath,
+            sizeof(modulePath));
+        if (modulePath[0] != '\0')
+        {
+            std::fprintf(file, "Fault module: %s\n", modulePath);
+        }
+    }
+    if (minidumpWritten)
+    {
+        std::fprintf(file, "Minidump: %s\n", minidumpPath);
+    }
+    else if (exceptionPointers)
+    {
+        std::fprintf(file, "Minidump: unavailable\n");
+    }
+#endif
     std::fprintf(file, "Application log: %s\n", g_applicationLogPathBytes.data());
     std::fprintf(file, "\nNotes:\n");
     std::fprintf(file, "- This is a best-effort local crash report.\n");
@@ -219,7 +389,7 @@ void signalHandler(int signalNumber)
     char detail[64]{};
     std::snprintf(detail, sizeof(detail), "signal=%d", signalNumber);
     writeCrashReport("fatal signal", detail);
-    std::_Exit(128 + signalNumber);
+    exitImmediately(128 + signalNumber);
 }
 
 [[noreturn]] void terminateHandler()
@@ -242,20 +412,22 @@ void signalHandler(int signalNumber)
     }
 
     writeCrashReport("terminate", detail);
-    std::_Exit(EXIT_FAILURE);
+    exitImmediately(EXIT_FAILURE);
 }
 
 #if defined(Q_OS_WIN)
 LONG WINAPI windowsUnhandledExceptionFilter(EXCEPTION_POINTERS* exceptionPointers)
 {
-    char detail[256]{};
+    char detail[512]{};
     if (exceptionPointers && exceptionPointers->ExceptionRecord)
     {
+        const unsigned long exceptionCode = static_cast<unsigned long>(exceptionPointers->ExceptionRecord->ExceptionCode);
         std::snprintf(
             detail,
             sizeof(detail),
-            "exception_code=0x%08lx exception_address=%p",
-            static_cast<unsigned long>(exceptionPointers->ExceptionRecord->ExceptionCode),
+            "exception=%s exception_code=0x%08lx exception_address=%p",
+            windowsExceptionName(exceptionCode),
+            exceptionCode,
             exceptionPointers->ExceptionRecord->ExceptionAddress);
     }
     else
@@ -263,7 +435,7 @@ LONG WINAPI windowsUnhandledExceptionFilter(EXCEPTION_POINTERS* exceptionPointer
         std::snprintf(detail, sizeof(detail), "exception_record=unavailable");
     }
 
-    writeCrashReport("windows unhandled exception", detail);
+    writeCrashReport("windows unhandled exception", detail, exceptionPointers);
     return EXCEPTION_EXECUTE_HANDLER;
 }
 #endif
@@ -271,10 +443,8 @@ LONG WINAPI windowsUnhandledExceptionFilter(EXCEPTION_POINTERS* exceptionPointer
 
 void CrashReportService::install()
 {
-    const QString root = applicationDataRoot();
-    g_crashReportDirectory = QDir(root).filePath("crash-reports");
-    QDir().mkpath(g_crashReportDirectory);
-    g_applicationLogPath = QDir(root).filePath("application.log");
+    g_crashReportDirectory = ApplicationPaths::crashReportDirectory();
+    g_applicationLogPath = ApplicationPaths::applicationLogFilePath();
 
     storePathForCrashHandler(g_crashReportDirectory, g_crashDirectoryBytes);
     storePathForCrashHandler(g_applicationLogPath, g_applicationLogPathBytes);
@@ -290,6 +460,8 @@ void CrashReportService::install()
     ::signal(SIGBUS, signalHandler);
 #endif
 #if defined(Q_OS_WIN)
+    ULONG stackGuaranteeBytes = 64 * 1024;
+    SetThreadStackGuarantee(&stackGuaranteeBytes);
     SetUnhandledExceptionFilter(windowsUnhandledExceptionFilter);
 #endif
 
@@ -301,7 +473,7 @@ QString CrashReportService::crashReportDirectory()
 {
     if (g_crashReportDirectory.isEmpty())
     {
-        return QDir(applicationDataRoot()).filePath("crash-reports");
+        return ApplicationPaths::crashReportDirectory();
     }
 
     return g_crashReportDirectory;
@@ -311,7 +483,7 @@ QString CrashReportService::applicationLogPath()
 {
     if (g_applicationLogPath.isEmpty())
     {
-        return QDir(applicationDataRoot()).filePath("application.log");
+        return ApplicationPaths::applicationLogFilePath();
     }
 
     return g_applicationLogPath;

@@ -5,6 +5,7 @@
 #include "DicomTreePanel.h"
 #include "Model/DicomParameters.h"
 #include "Services/IAnnotationReportService.h"
+#include "Services/ISeriesPreviewService.h"
 
 #include <QStandardItem>
 
@@ -31,6 +32,11 @@ void DicomTreeController::setDatabaseService(DatabaseService* databaseService)
 void DicomTreeController::setAnnotationReportService(IAnnotationReportService* annotationReportService)
 {
     m_annotationReportService = annotationReportService;
+}
+
+void DicomTreeController::setSeriesPreviewService(ISeriesPreviewService* seriesPreviewService)
+{
+    m_seriesPreviewService = seriesPreviewService;
 }
 
 void DicomTreeController::bindPanel(DicomTreePanel* treePanel)
@@ -95,8 +101,12 @@ void DicomTreeController::onHierarchyItemActivated(const QModelIndex& index)
     {
         if (nodeType == TreeRoles::NodeTypePatient)
         {
-            const DicomPreviewItems items =
+            DicomPreviewItems items =
                 m_databaseService->getStudyPreviewItemsForPatient(item->data(TreeRoles::PatientId).toString());
+            if (m_seriesPreviewService)
+            {
+                items = m_seriesPreviewService->ensurePreviewPixmaps(items);
+            }
             m_treePanel->updatePreviewItems(countTitle(items.size(), "study", "studies"), items, "No studies found");
         }
         else if (nodeType == TreeRoles::NodeTypeStudy)
@@ -260,7 +270,11 @@ void DicomTreeController::showSeriesPreviewsForStudy(const QString& studyInstanc
         return;
     }
 
-    const DicomPreviewItems items = m_databaseService->getSeriesPreviewItemsForStudy(studyInstanceUid);
+    DicomPreviewItems items = m_databaseService->getSeriesPreviewItemsForStudy(studyInstanceUid);
+    if (m_seriesPreviewService)
+    {
+        items = m_seriesPreviewService->ensurePreviewPixmaps(items);
+    }
     m_treePanel->updatePreviewItems(countTitle(items.size(), "series", "series"), items, "No series found");
 }
 

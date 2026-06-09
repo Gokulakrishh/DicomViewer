@@ -21,6 +21,11 @@ CMakeLists.txt.user*
 build/
 build-*/
 cmake-build-*/
+artifacts/
+*.msix
+*.msixbundle
+*.appx
+*.appxbundle
 
 # Internal Tools
 tools/
@@ -45,6 +50,8 @@ tools/
 *.o
 *.obj
 *.pdb
+*.pfx
+*.cer
 *.so
 *.so.*
 

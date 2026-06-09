@@ -264,6 +264,7 @@ set(SRC_FILES
     src/Errors/QtErrorDialogPresenter.cpp
     src/Utilities/AppStyle.cpp
     src/Utilities/AppIcons.cpp
+    src/Utilities/ApplicationPaths.cpp
     src/Utilities/AppDialogBase.cpp
     src/Utilities/AiApiKeyDialog.cpp
     src/Utilities/CrashReportService.cpp
@@ -285,6 +286,7 @@ set(SRC_FILES
     src/Services/AnnotationReportService.cpp
     src/Services/CineFrameCache.cpp
     src/Services/MeasurementAnnotationStore.cpp
+    src/Services/SeriesPreviewService.cpp
     src/DicomViewerWindow/DicomViewportController.cpp
     src/DicomViewerWindow/ViewportSession.cpp
     src/Services/AdvancedSeriesVolumeService.cpp
@@ -326,6 +328,7 @@ set(HEADER_FILES
     src/Utilities/AiServiceSettings.h
     src/Utilities/AppStyle.h
     src/Utilities/AppIcons.h
+    src/Utilities/ApplicationPaths.h
     src/Utilities/AppDialogBase.h
     src/Utilities/AiApiKeyDialog.h
     src/Utilities/AiMessageFormatter.h
@@ -371,6 +374,8 @@ set(HEADER_FILES
     src/Services/AnnotationReportService.h
     src/Services/CineFrameCache.h
     src/Services/IAnnotationReportService.h
+    src/Services/ISeriesPreviewService.h
+    src/Services/SeriesPreviewService.h
     src/Services/VolumeBuilder.h
     src/Services/MeasurementAnnotationStore.h
     src/Services/VolumeResampleService.h
@@ -464,6 +469,11 @@ if (WIN32)
     set_target_properties(${PROJECT_NAME} PROPERTIES
         WIN32_EXECUTABLE ON
     )
+    if(MSVC)
+        target_link_options(${PROJECT_NAME} PRIVATE /STACK:8388608)
+    elseif(MINGW)
+        target_link_options(${PROJECT_NAME} PRIVATE -Wl,--stack,8388608)
+    endif()
 endif()
 
 if (APPLE)

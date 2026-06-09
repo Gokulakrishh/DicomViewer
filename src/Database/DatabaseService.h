@@ -170,4 +170,12 @@ public:
      * @return Lightweight preview items for study browser navigation.
      */
     virtual DicomPreviewItems getSeriesPreviewItemsForStudy(const QString& studyInstanceUid) = 0;
+
+    /**
+     * @brief Stores a representative thumbnail for one series.
+     * @param seriesInstanceUid DICOM Series Instance UID.
+     * @param previewPixmap Bounded derived preview image.
+     * @return True when the thumbnail was persisted.
+     */
+    virtual bool upsertSeriesPreview(const QString& seriesInstanceUid, const QPixmap& previewPixmap) = 0;
 };

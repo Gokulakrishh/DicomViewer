@@ -38,6 +38,7 @@ class IAiAssistantService;
 class IWarningDialogService;
 class Patient;
 class Series;
+class SeriesPreviewService;
 class Study;
 class AdvancedSeriesVolumeService;
 class AnnotationReportService;
@@ -218,6 +219,7 @@ private:
     std::unique_ptr<DatabaseService> m_databaseService;
     std::unique_ptr<MeasurementAnnotationStore> m_measurementAnnotationStore;
     std::unique_ptr<AnnotationReportService> m_annotationReportService;
+    std::unique_ptr<SeriesPreviewService> m_seriesPreviewService;
     std::unique_ptr<IWarningDialogService> m_warningDialogService;
     QTimer* m_cineTimer{nullptr};
     QFutureWatcher<AiChatResponse>* m_aiResponseWatcher{nullptr};

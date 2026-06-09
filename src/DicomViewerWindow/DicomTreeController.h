@@ -7,6 +7,7 @@ struct DicomPreviewItem;
 class DatabaseService;
 class DicomTreePanel;
 class IAnnotationReportService;
+class ISeriesPreviewService;
 class QStandardItem;
 
 /**
@@ -43,6 +44,12 @@ public:
      * @param annotationReportService Non-owning report service pointer.
      */
     void setAnnotationReportService(IAnnotationReportService* annotationReportService);
+
+    /**
+     * @brief Sets the service used to generate missing preview thumbnails.
+     * @param seriesPreviewService Non-owning preview service pointer.
+     */
+    void setSeriesPreviewService(ISeriesPreviewService* seriesPreviewService);
 
     /**
      * @brief Binds the controller to a tree panel.
@@ -86,5 +93,6 @@ private:
 
     DatabaseService* m_databaseService{nullptr};
     IAnnotationReportService* m_annotationReportService{nullptr};
+    ISeriesPreviewService* m_seriesPreviewService{nullptr};
     DicomTreePanel* m_treePanel{nullptr};
 };
