@@ -26,6 +26,11 @@ public:
     using PatientPtr = std::shared_ptr<Patient>;
     using PatientList = QList<PatientPtr>;
     using ProgressCallback = std::function<void(int current, int total)>;
+    using ImageFrameVisitor = std::function<bool(
+        int frameIndex,
+        const DicomImage& image,
+        QString* errorMessage)>;
+    using CancellationCheck = std::function<bool()>;
 
     virtual ~FileHandling() = default;
 
@@ -51,6 +56,24 @@ public:
      * @return Loaded DicomImage, or null when unsupported/unreadable.
      */
     virtual std::unique_ptr<DicomImage> loadImageData(const QString& filePath, int frameIndex = 0) const = 0;
+
+    /**
+     * @brief Decodes one multi-frame DICOM once and visits a selected frame range.
+     * @param filePath Source multi-frame DICOM path.
+     * @param firstFrameIndex First zero-based frame to visit.
+     * @param lastFrameIndex Last zero-based frame to visit.
+     * @param visitor Consumer called for each temporary decoded frame.
+     * @param isCancelled Optional cancellation callback.
+     * @param errorMessage Receives a recoverable failure description.
+     * @return True when every requested frame was visited successfully.
+     */
+    virtual bool visitImageDataFrames(
+        const QString& filePath,
+        int firstFrameIndex,
+        int lastFrameIndex,
+        const ImageFrameVisitor& visitor,
+        const CancellationCheck& isCancelled = {},
+        QString* errorMessage = nullptr) const = 0;
 
     /**
      * @brief Loads patient/study/series hierarchy for one DICOM file.

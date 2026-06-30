@@ -7,6 +7,7 @@ Cross Axial Dicom Viewer is a `Qt 6` / `C++20` desktop application for browsing 
 - DICOM import with `GDCM`
 - raw grayscale rendering with true `WL/WW`
 - slice scrolling and cine playback
+- selected-range XA cine export to derived non-diagnostic MP4/H.264 video
 - VTK MPR viewer with synchronized axial / coronal / sagittal panes and a 3D reference pane
 - VTK 3D rendered (on progress)
 - local SQLite metadata and annotation persistence
@@ -40,6 +41,7 @@ You need:
 - `Qt 6`
 - `VTK` with Qt 6 support (I built VTK with Qt-6)
 - `GDCM`
+- `GStreamer 1.24.x` core/App plus reviewed platform plugins (`appsrc`, `videoconvert`, `textoverlay`, `vtenc_h264` on macOS or `mfh264enc` on Windows, `h264parse`, `mp4mux`)
 - Qt SQL SQLite plugin
 
 ## Build On A New Machine
@@ -47,7 +49,9 @@ You need:
 ### 1. Local SQLite
 
 The default desktop build uses local SQLite. No database server, database username, or database password is required.
-The database file is created automatically in the platform application data folder.
+The database file is created automatically under:
+
+`Documents/Cross Axial Dicom Viewer/data/crossaxial.sqlite`
 
 ### 2. Build
 

@@ -50,14 +50,6 @@ public:
     void setCineAvailable(bool available);
     /** @brief Updates cine playback UI state. */
     void setCinePlaying(bool playing);
-    /** @brief Deprecated no-op; DICOM details are shown in the annotation dock instead of over the image. */
-    void setPatientInfoText(
-        const QString& patientName,
-        const QString& age,
-        const QString& dateOfBirth,
-        const QString& doctor,
-        const QString& modality,
-        const QString& scanDate);
     void setWindowLevelWidth(int windowLevel, int windowWidth);
     void setWindowLevelInteractionEnabled(bool enabled);
     void setZoomInteractionEnabled(bool enabled);

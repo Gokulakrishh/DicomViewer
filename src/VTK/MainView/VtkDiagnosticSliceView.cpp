@@ -228,22 +228,6 @@ void VtkDiagnosticSliceView::setCinePlaying(bool playing)
     m_cinePlayButton->blockSignals(false);
 }
 
-void VtkDiagnosticSliceView::setPatientInfoText(
-    const QString& patientName,
-    const QString& age,
-    const QString& dateOfBirth,
-    const QString& doctor,
-    const QString& modality,
-    const QString& scanDate)
-{
-    Q_UNUSED(patientName)
-    Q_UNUSED(age)
-    Q_UNUSED(dateOfBirth)
-    Q_UNUSED(doctor)
-    Q_UNUSED(modality)
-    Q_UNUSED(scanDate)
-}
-
 void VtkDiagnosticSliceView::setWindowLevelWidth(int windowLevel, int windowWidth)
 {
     m_currentWindowLevel = windowLevel;

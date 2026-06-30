@@ -6,11 +6,7 @@
 #include <QGuiApplication>
 #include <QImage>
 #include <QPixmap>
-#include <QSqlDatabase>
-#include <QSqlError>
-#include <QSqlQuery>
 #include <QTemporaryDir>
-#include <QUuid>
 #include <iostream>
 #include <memory>
 
@@ -30,54 +26,6 @@ std::unique_ptr<DicomImage> makeImage(const QString& sopInstanceUid, const QStri
     image->setFilePath(QString("/tmp/%1.dcm").arg(sopInstanceUid));
     image->setDimensions(16, 16);
     return image;
-}
-
-bool createLegacyAnnotationTableDatabase(const QString& databasePath, QString* errorMessage)
-{
-    const QString connectionName = "LegacyAnnotationTableSmokeTest_" + QUuid::createUuid().toString(QUuid::Id128);
-    QSqlDatabase database = QSqlDatabase::addDatabase("QSQLITE", connectionName);
-    database.setDatabaseName(databasePath);
-    if (!database.open())
-    {
-        if (errorMessage)
-        {
-            *errorMessage = database.lastError().text();
-        }
-        database = QSqlDatabase();
-        QSqlDatabase::removeDatabase(connectionName);
-        return false;
-    }
-
-    QSqlQuery query(database);
-    const bool created = query.exec(
-        "CREATE TABLE measurement_annotations ("
-        "annotation_id TEXT PRIMARY KEY,"
-        "series_instance_uid TEXT NOT NULL,"
-        "sop_instance_uid TEXT NOT NULL,"
-        "measurement_type TEXT NOT NULL,"
-        "points_json TEXT NOT NULL,"
-        "color_hex TEXT NOT NULL,"
-        "length_mm REAL,"
-        "angle_degrees REAL,"
-        "area_mm2 REAL,"
-        "sample_count INTEGER,"
-        "mean_value REAL,"
-        "stddev_value REAL,"
-        "min_value REAL,"
-        "max_value REAL,"
-        "created_at TEXT NOT NULL DEFAULT (STRFTIME('%Y-%m-%dT%H:%M:%fZ', 'now')),"
-        "updated_at TEXT NOT NULL DEFAULT (STRFTIME('%Y-%m-%dT%H:%M:%fZ', 'now')),"
-        "is_deleted INTEGER NOT NULL DEFAULT 0"
-        ")");
-    if (!created && errorMessage)
-    {
-        *errorMessage = query.lastError().text();
-    }
-
-    database.close();
-    database = QSqlDatabase();
-    QSqlDatabase::removeDatabase(connectionName);
-    return created;
 }
 }
 
@@ -287,51 +235,6 @@ int main(int argc, char* argv[])
     if (!reportService.loadRows(filter).isEmpty())
     {
         return fail("Deleted measurement annotation is still returned by report rows.");
-    }
-
-    const QString legacyDatabasePath = directory.filePath("legacy-annotation-table.sqlite");
-    QString legacyError;
-    if (!createLegacyAnnotationTableDatabase(legacyDatabasePath, &legacyError))
-    {
-        return fail("Failed to create legacy annotation table database: " + legacyError);
-    }
-
-    DatabaseSettings legacySettings;
-    legacySettings.setFilePath(legacyDatabasePath);
-
-    SqliteService legacyService(legacySettings);
-    if (!legacyService.initialize())
-    {
-        return fail("Failed to migrate legacy annotation table: " + legacyService.lastErrorText());
-    }
-
-    auto legacyPatient = std::make_shared<Patient>();
-    legacyPatient->setPatientId("PAT-LEGACY");
-    legacyPatient->setPatientName("Legacy^Annotation");
-
-    Study& legacyStudy = legacyPatient->getOrCreateStudy("1.2.3.legacy.study");
-    legacyStudy.setStudyDate("20260504");
-
-    Series& legacySeries = legacyStudy.getOrCreateSeries("1.2.3.legacy.series");
-    legacySeries.setModality("CT");
-    legacySeries.addImage(makeImage("1.2.3.legacy.slice.1", "1"));
-
-    if (!legacyService.savePatient(legacyPatient))
-    {
-        return fail("Failed to save patient after legacy annotation migration: " + legacyService.lastErrorText());
-    }
-
-    SliceMeasurementAnnotationRecord legacyAnnotation;
-    legacyAnnotation.seriesInstanceUid = "1.2.3.legacy.series";
-    legacyAnnotation.sopInstanceUid = "1.2.3.legacy.slice.1";
-    legacyAnnotation.measurement.id = "ann-legacy-001";
-    legacyAnnotation.measurement.type = MeasurementType::Distance;
-    legacyAnnotation.measurement.points = {{0.0, 0.0, 0.0}, {12.0, 0.0, 0.0}};
-    legacyAnnotation.measurement.lengthMm = 12.0;
-
-    if (!legacyService.upsertSliceMeasurementAnnotation(legacyAnnotation))
-    {
-        return fail("Failed to save annotation after legacy metadata column migration.");
     }
 
     return 0;

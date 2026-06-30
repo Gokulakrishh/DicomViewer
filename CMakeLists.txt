@@ -63,13 +63,42 @@ message(STATUS "Qt major version: 6")
 set(DICOMVIEWER_ENABLE_QML3D OFF)
 if(TARGET Qt6::Qml AND TARGET Qt6::Quick AND TARGET Qt6::QuickWidgets AND TARGET Qt6::Quick3D)
     set(DICOMVIEWER_ENABLE_QML3D ON)
-    message(STATUS "Legacy QML 3D viewer enabled")
+    message(STATUS "QML 3D viewer enabled")
 else()
-    message(STATUS "Legacy QML 3D viewer disabled: Qt Qml/Quick/QuickWidgets/Quick3D stack not fully available")
+    message(STATUS "QML 3D viewer disabled: Qt Qml/Quick/QuickWidgets/Quick3D stack not fully available")
 endif()
 
 find_package(GDCM REQUIRED)
 message(STATUS "GDCM")
+
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(GSTREAMER_CORE REQUIRED IMPORTED_TARGET gstreamer-1.0>=1.24)
+pkg_check_modules(GSTREAMER_APP REQUIRED IMPORTED_TARGET gstreamer-app-1.0>=1.24)
+if(NOT GSTREAMER_CORE_VERSION MATCHES "^1\\.24\\." OR
+   NOT GSTREAMER_APP_VERSION MATCHES "^1\\.24\\.")
+    message(FATAL_ERROR
+        "Cross Axial Dicom Viewer requires GStreamer 1.24.x; found core "
+        "${GSTREAMER_CORE_VERSION}, app ${GSTREAMER_APP_VERSION}")
+endif()
+message(STATUS "GStreamer version: ${GSTREAMER_CORE_VERSION}")
+
+if(APPLE)
+    # MacPorts pkg-config adds a generic /opt/local/lib rpath. That directory
+    # may also contain a second VTK build, which can satisfy the selected VTK
+    # installation's @rpath references and load two incompatible VTK copies.
+    # GStreamer/GDCM dylibs use absolute install names, so this rpath is neither
+    # required nor safe for the application target.
+    foreach(gstreamer_target IN ITEMS PkgConfig::GSTREAMER_CORE PkgConfig::GSTREAMER_APP)
+        get_target_property(gstreamer_link_options ${gstreamer_target} INTERFACE_LINK_OPTIONS)
+        if(gstreamer_link_options)
+            list(FILTER gstreamer_link_options EXCLUDE REGEX "^-Wl,-rpath,/opt/local/lib$")
+            set_property(
+                TARGET ${gstreamer_target}
+                PROPERTY INTERFACE_LINK_OPTIONS "${gstreamer_link_options}"
+            )
+        endif()
+    endforeach()
+endif()
 
 set(APP_3D_MODEL_SOURCES
     src/Model/MeshData.cpp
@@ -277,6 +306,8 @@ set(SRC_FILES
     src/DicomViewerWindow/AnnotationReportDock.cpp
     src/DicomViewerWindow/AnnotationSliceBrowserPanel.cpp
     src/DicomViewerWindow/CurrentSliceAnnotationPanel.cpp
+    src/DicomViewerWindow/VideoExportController.cpp
+    src/DicomViewerWindow/VideoExportDialog.cpp
     src/DicomViewerWindow/RegulatorySplashDialog.cpp
     src/DicomViewerWindow/DicomMainWindow.cpp
     src/DicomViewerWindow/DicomTreeController.cpp
@@ -287,6 +318,8 @@ set(SRC_FILES
     src/Services/CineFrameCache.cpp
     src/Services/MeasurementAnnotationStore.cpp
     src/Services/SeriesPreviewService.cpp
+    src/Services/VideoExport/DicomCineFrameProvider.cpp
+    src/Services/VideoExport/GStreamerVideoExportService.cpp
     src/DicomViewerWindow/DicomViewportController.cpp
     src/DicomViewerWindow/ViewportSession.cpp
     src/Services/AdvancedSeriesVolumeService.cpp
@@ -363,6 +396,8 @@ set(HEADER_FILES
     src/DicomViewerWindow/AnnotationSliceBrowserPanel.h
     src/DicomViewerWindow/AnnotationUiOptions.h
     src/DicomViewerWindow/CurrentSliceAnnotationPanel.h
+    src/DicomViewerWindow/VideoExportController.h
+    src/DicomViewerWindow/VideoExportDialog.h
     src/DicomViewerWindow/RegulatorySplashDialog.h
     src/DicomViewerWindow/DicomMainWindow.h
     src/DicomViewerWindow/DicomTreeController.h
@@ -376,6 +411,11 @@ set(HEADER_FILES
     src/Services/IAnnotationReportService.h
     src/Services/ISeriesPreviewService.h
     src/Services/SeriesPreviewService.h
+    src/Services/VideoExport/DicomCineFrameProvider.h
+    src/Services/VideoExport/GStreamerVideoExportService.h
+    src/Services/VideoExport/IVideoExportService.h
+    src/Services/VideoExport/IVideoFrameProvider.h
+    src/Services/VideoExport/VideoExportTypes.h
     src/Services/VolumeBuilder.h
     src/Services/MeasurementAnnotationStore.h
     src/Services/VolumeResampleService.h
@@ -421,6 +461,8 @@ target_link_libraries(${PROJECT_NAME}
         Qt6::Sql
         Qt6::Concurrent
         Qt6::Network
+        PkgConfig::GSTREAMER_CORE
+        PkgConfig::GSTREAMER_APP
     	${GDCM_LIBRARIES}
         gdcmCommon
         gdcmMSFF
@@ -575,6 +617,27 @@ add_executable(SqliteServiceSmokeTest
     src/Services/IAnnotationReportService.h
 )
 
+add_executable(VideoExportSmokeTest
+    tests/VideoExportSmokeTest.cpp
+    src/Services/VideoExport/GStreamerVideoExportService.cpp
+    src/Services/VideoExport/GStreamerVideoExportService.h
+    src/Services/VideoExport/IVideoExportService.h
+    src/Services/VideoExport/IVideoFrameProvider.h
+    src/Services/VideoExport/VideoExportTypes.h
+)
+
+target_include_directories(VideoExportSmokeTest PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(VideoExportSmokeTest
+    PRIVATE
+        Qt6::Core
+        Qt6::Gui
+        PkgConfig::GSTREAMER_CORE
+        PkgConfig::GSTREAMER_APP
+)
+
 target_include_directories(SqliteServiceSmokeTest PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
@@ -591,4 +654,5 @@ if(BUILD_TESTING)
     set_tests_properties(SqliteServiceSmokeTest PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
     )
+    add_test(NAME VideoExportSmokeTest COMMAND VideoExportSmokeTest)
 endif()

@@ -660,6 +660,95 @@ std::unique_ptr<DicomImage> GDCMFileHandling::loadImageData(const QString& fileP
     return loadDicomImage(filePath, reader, false, frameIndex);
 }
 
+bool GDCMFileHandling::visitImageDataFrames(
+    const QString& filePath,
+    int firstFrameIndex,
+    int lastFrameIndex,
+    const ImageFrameVisitor& visitor,
+    const CancellationCheck& isCancelled,
+    QString* errorMessage) const
+{
+    if (!visitor || firstFrameIndex < 0 || lastFrameIndex < firstFrameIndex)
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("Invalid DICOM frame visitor request.");
+        }
+        return false;
+    }
+
+    gdcm::ImageReader reader;
+    reader.SetFileName(filePath.toStdString().c_str());
+    if (!readGdcmImageReader(reader, filePath))
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("GDCM could not read the selected cine source.");
+        }
+        return false;
+    }
+
+    QVector<char> decodedBuffer;
+    if (!decodePixelBuffer(filePath, reader, decodedBuffer))
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("GDCM could not decode the selected cine source.");
+        }
+        return false;
+    }
+
+    const std::shared_ptr<DicomInstanceMetadata> metadata = extractDicomInstanceMetadata(reader);
+    const int frameCount = metadata ? std::max(1, metadata->numberOfFrames) : 1;
+    if (lastFrameIndex >= frameCount)
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("The selected cine frame range exceeds the source frame count.");
+        }
+        return false;
+    }
+
+    for (int frameIndex = firstFrameIndex; frameIndex <= lastFrameIndex; ++frameIndex)
+    {
+        if (isCancelled && isCancelled())
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral("DICOM frame visitation was cancelled.");
+            }
+            return false;
+        }
+
+        std::unique_ptr<DicomImage> frame = loadDicomImage(
+            filePath,
+            reader,
+            false,
+            frameIndex,
+            &decodedBuffer);
+        if (!frame)
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral("Failed to decode cine frame %1.").arg(frameIndex + 1);
+            }
+            return false;
+        }
+
+        QString visitorError;
+        if (!visitor(frameIndex, *frame, &visitorError))
+        {
+            if (errorMessage)
+            {
+                *errorMessage = visitorError;
+            }
+            return false;
+        }
+    }
+
+    return true;
+}
+
 QHash<int, std::shared_ptr<DicomImage>> GDCMFileHandling::loadImageDataFrames(
     const QString& filePath,
     const QList<int>& frameIndices) const

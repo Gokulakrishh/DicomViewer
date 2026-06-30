@@ -187,9 +187,6 @@ private:
     bool ensureConnection();
     /** @brief Creates the current database schema when missing. */
     bool createTables();
-    /** @brief Migrates annotation metadata columns used by the report UI. */
-    bool ensureAnnotationMetadataColumns();
-    bool ensureSliceMetadataColumns();
     /** @brief Persists one study row under an existing patient. */
     bool saveStudy(const QString& patientId, const Study& study);
     /** @brief Persists one series row under an existing study. */

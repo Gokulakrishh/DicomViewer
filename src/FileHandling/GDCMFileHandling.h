@@ -58,6 +58,14 @@ public:
      */
     std::unique_ptr<DicomImage> loadImageData(const QString& filePath, int frameIndex = 0) const override;
 
+    bool visitImageDataFrames(
+        const QString& filePath,
+        int firstFrameIndex,
+        int lastFrameIndex,
+        const ImageFrameVisitor& visitor,
+        const CancellationCheck& isCancelled = {},
+        QString* errorMessage = nullptr) const override;
+
     /**
      * @brief Loads multiple frames from one multi-frame DICOM using one decoded buffer.
      * @param filePath Source DICOM file path.

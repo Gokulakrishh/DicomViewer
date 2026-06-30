@@ -1263,11 +1263,6 @@ bool SqliteService::createTables()
         }
     }
 
-    if (!ensureAnnotationMetadataColumns() || !ensureSliceMetadataColumns())
-    {
-        return false;
-    }
-
     static const char* indexStatements[] = {
         "CREATE INDEX IF NOT EXISTS idx_dicom_slice_metadata_series_instance_uid "
         "ON dicom_slice_metadata(series_instance_uid)",
@@ -1287,84 +1282,6 @@ bool SqliteService::createTables()
         if (!query.exec(QString::fromUtf8(statement)))
         {
             qWarning() << "Failed to create SQLite index:" << query.lastError().text();
-            return false;
-        }
-    }
-
-    return true;
-}
-
-bool SqliteService::ensureAnnotationMetadataColumns()
-{
-    QSet<QString> existingColumns;
-    QSqlQuery columnQuery(m_connection->database());
-    if (!columnQuery.exec("PRAGMA table_info(measurement_annotations)"))
-    {
-        qWarning() << "Failed to inspect measurement annotation columns:" << columnQuery.lastError().text();
-        return false;
-    }
-
-    while (columnQuery.next())
-    {
-        existingColumns.insert(columnQuery.value("name").toString());
-    }
-
-    const QVector<QString> migrationStatements{
-        existingColumns.contains("label") ? QString() : QString("ALTER TABLE measurement_annotations ADD COLUMN label TEXT"),
-        existingColumns.contains("body_region") ? QString() : QString("ALTER TABLE measurement_annotations ADD COLUMN body_region TEXT NOT NULL DEFAULT 'Other'"),
-        existingColumns.contains("note") ? QString() : QString("ALTER TABLE measurement_annotations ADD COLUMN note TEXT"),
-        existingColumns.contains("frame_index") ? QString() : QString("ALTER TABLE measurement_annotations ADD COLUMN frame_index INTEGER NOT NULL DEFAULT 0")};
-
-    for (const QString& statement : migrationStatements)
-    {
-        if (statement.isEmpty())
-        {
-            continue;
-        }
-
-        QSqlQuery query(m_connection->database());
-        if (!query.exec(statement))
-        {
-            qWarning() << "Failed to migrate measurement annotation table:" << query.lastError().text();
-            return false;
-        }
-    }
-
-    return true;
-}
-
-bool SqliteService::ensureSliceMetadataColumns()
-{
-    QSet<QString> existingColumns;
-    QSqlQuery columnQuery(m_connection->database());
-    if (!columnQuery.exec("PRAGMA table_info(dicom_slice_metadata)"))
-    {
-        qWarning() << "Failed to inspect DICOM slice metadata columns:" << columnQuery.lastError().text();
-        return false;
-    }
-
-    while (columnQuery.next())
-    {
-        existingColumns.insert(columnQuery.value("name").toString());
-    }
-
-    const QVector<QString> migrationStatements{
-        existingColumns.contains("frame_count") ? QString() : QString("ALTER TABLE dicom_slice_metadata ADD COLUMN frame_count INTEGER NOT NULL DEFAULT 1"),
-        existingColumns.contains("frame_time_ms") ? QString() : QString("ALTER TABLE dicom_slice_metadata ADD COLUMN frame_time_ms REAL"),
-        existingColumns.contains("cine_rate_fps") ? QString() : QString("ALTER TABLE dicom_slice_metadata ADD COLUMN cine_rate_fps REAL"),
-        existingColumns.contains("frame_interval_ms") ? QString() : QString("ALTER TABLE dicom_slice_metadata ADD COLUMN frame_interval_ms REAL NOT NULL DEFAULT 100")};
-
-    for (const QString& statement : migrationStatements)
-    {
-        if (statement.isEmpty())
-        {
-            continue;
-        }
-
-        QSqlQuery query(m_connection->database());
-        if (!query.exec(statement))
-        {
-            qWarning() << "Failed to migrate DICOM slice metadata table:" << query.lastError().text();
             return false;
         }
     }

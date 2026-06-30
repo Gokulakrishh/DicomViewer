@@ -43,6 +43,7 @@ class Study;
 class AdvancedSeriesVolumeService;
 class AnnotationReportService;
 class LoadingDialog;
+class VideoExportController;
 class WarningDialogService;
 
 /**
@@ -98,7 +99,6 @@ private:
     void setupStudyBrowserDock();
     void setupViewerSurface();
     void setupViewerToolbar();
-    void setupLegacyViewerControls();
     void setupCoreServices();
     void setupAsyncInfrastructure();
     void setupAnnotationReportDock();
@@ -146,6 +146,7 @@ private slots:
     void onSliceWheelRequested(int stepCount);
     void onCineToggled(bool checked);
     void advanceCinePlayback();
+    void exportCurrentCine();
     void onLocalSearchTextChanged(const QString& text);
     void onGlobalSearchTextChanged(const QString& text);
     void onAskAiClicked();
@@ -206,6 +207,7 @@ private:
     QAction* m_polylineMeasurementToolAction{nullptr};
     QAction* m_angleMeasurementToolAction{nullptr};
     QAction* m_rectangleRoiMeasurementToolAction{nullptr};
+    QAction* m_exportCineAction{nullptr};
     QToolBar* m_viewerToolBar{nullptr};
     std::unique_ptr<ViewerToolPresentation> m_viewerToolPresentation;
     QComboBox* m_windowLevelPresetComboBox{nullptr};
@@ -221,6 +223,7 @@ private:
     std::unique_ptr<AnnotationReportService> m_annotationReportService;
     std::unique_ptr<SeriesPreviewService> m_seriesPreviewService;
     std::unique_ptr<IWarningDialogService> m_warningDialogService;
+    VideoExportController* m_videoExportController{nullptr};
     QTimer* m_cineTimer{nullptr};
     QFutureWatcher<AiChatResponse>* m_aiResponseWatcher{nullptr};
     QFutureWatcher<FolderImportResult>* m_folderImportWatcher{nullptr};

@@ -24,6 +24,7 @@
 #include <QSet>
 #include <QSlider>
 #include <QStatusBar>
+#include <QStyle>
 #include <QStringList>
 #include <QTextCursor>
 #include <QVBoxLayout>
@@ -54,6 +55,9 @@
 #include "Services/AdvancedSeriesVolumeService.h"
 #include "Services/SeriesPreviewService.h"
 #include "Services/ThreeDProfiles/ThreeDProfileSelection.h"
+#include "Services/VideoExport/GStreamerVideoExportService.h"
+#include "DicomViewerWindow/VideoExportController.h"
+#include "AppVersion.h"
 
 namespace
 {
@@ -149,7 +153,6 @@ void DicomMainWindow::setUiComponents()
     setupViewerToolbar();
     setupStudyBrowserDock();
     setupViewerSurface();
-    setupLegacyViewerControls();
     setupCoreServices();
     setupAnnotationReportDock();
     setupAsyncInfrastructure();
@@ -195,15 +198,6 @@ void DicomMainWindow::setupViewerSurface()
     m_view->setCinePlaying(false);
 }
 
-void DicomMainWindow::setupLegacyViewerControls()
-{
-    m_ui->contrastVerticalSlider->hide();
-    m_ui->imageVerticalSlider->hide();
-    m_ui->cineCheckBox->hide();
-    m_ui->cineLabel->hide();
-    m_ui->viewerControlsSeparator->hide();
-}
-
 void DicomMainWindow::setupCoreServices()
 {
     m_cineTimer = new QTimer(this);
@@ -222,6 +216,10 @@ void DicomMainWindow::setupCoreServices()
     m_measurementAnnotationStore = std::make_unique<MeasurementAnnotationStore>(*m_databaseService);
     m_annotationReportService = std::make_unique<AnnotationReportService>(*m_databaseService);
     m_seriesPreviewService = std::make_unique<SeriesPreviewService>(*m_databaseService, *m_gdcmHandler);
+    m_videoExportController = new VideoExportController(
+        std::make_shared<GStreamerVideoExportService>(),
+        m_auditService.get(),
+        this);
     if (m_treeController)
     {
         m_treeController->setDatabaseService(m_databaseService.get());
@@ -294,6 +292,16 @@ void DicomMainWindow::setupViewerToolbar()
     rebuildWindowLevelPresetComboBox();
     m_viewerToolBar->addWidget(m_windowLevelPresetComboBox);
     connect(m_windowLevelPresetComboBox, &QComboBox::currentIndexChanged, this, &DicomMainWindow::onWindowLevelPresetSelected);
+
+    m_viewerToolBar->addSeparator();
+    m_exportCineAction = new QAction(
+        style()->standardIcon(QStyle::SP_DialogSaveButton),
+        QStringLiteral("Export Cine"),
+        this);
+    m_exportCineAction->setToolTip(QStringLiteral("Export selected XA cine frames"));
+    m_exportCineAction->setEnabled(false);
+    m_viewerToolBar->addAction(m_exportCineAction);
+    connect(m_exportCineAction, &QAction::triggered, this, &DicomMainWindow::exportCurrentCine);
     syncViewerToolbarState();
 }
 
@@ -342,24 +350,22 @@ void DicomMainWindow::setupConnections()
         connect(m_folderImportWatcher, &QFutureWatcher<FolderImportResult>::finished, this, &DicomMainWindow::onFolderImportFinished);
     }
 
+    if (m_videoExportController)
+    {
+        connect(m_videoExportController, &VideoExportController::runningChanged, this, [this](bool) { updateCineControls(); });
+        connect(m_videoExportController, &VideoExportController::exportSucceeded, this, [this](const QString& message) { statusBar()->showMessage(message, 8000); });
+        connect(m_videoExportController, &VideoExportController::exportCancelled, this, [this]() { statusBar()->showMessage(QStringLiteral("XA cine export cancelled."), 5000); });
+        connect(m_videoExportController, &VideoExportController::exportFailed, this, [this](const QString& message) { statusBar()->showMessage(message, 8000);
+                m_warningDialogService->showWarning(QStringLiteral("Export XA Cine"), message);
+            });
+    }
+
     if (m_annotationReportPanel)
     {
         connect(m_annotationReportPanel, &AnnotationReportDock::filterChanged, this, &DicomMainWindow::onAnnotationReportFilterChanged);
-        connect(
-            m_annotationReportPanel,
-            &AnnotationReportDock::goToSliceRequested,
-            this,
-            &DicomMainWindow::onAnnotationReportGoToSliceRequested);
-        connect(
-            m_annotationReportPanel,
-            &AnnotationReportDock::metadataChanged,
-            this,
-            &DicomMainWindow::onAnnotationReportMetadataChanged);
-        connect(
-            m_annotationReportPanel,
-            &AnnotationReportDock::deleteRequested,
-            this,
-            &DicomMainWindow::onAnnotationReportDeleteRequested);
+        connect(m_annotationReportPanel, &AnnotationReportDock::goToSliceRequested, this, &DicomMainWindow::onAnnotationReportGoToSliceRequested);
+        connect(m_annotationReportPanel, &AnnotationReportDock::metadataChanged, this, &DicomMainWindow::onAnnotationReportMetadataChanged);
+        connect(m_annotationReportPanel, &AnnotationReportDock::deleteRequested, this, &DicomMainWindow::onAnnotationReportDeleteRequested);
     }
 
     refreshAnnotationReportDock();
@@ -441,6 +447,12 @@ void DicomMainWindow::updatePatientInfo(
 void DicomMainWindow::updateCineControls()
 {
     const bool hasPlayableSeries = m_viewportController && m_viewportController->hasPlayableSeries();
+    const DicomImage* currentImage = m_viewportController ? m_viewportController->currentImage() : nullptr;
+    const bool hasExportableCine =
+        currentImage &&
+        currentImage->frameCount() > 1 &&
+        !currentImage->filePath().trimmed().isEmpty() &&
+        (!m_videoExportController || !m_videoExportController->isRunning());
 
     if (m_view)
     {
@@ -453,6 +465,10 @@ void DicomMainWindow::updateCineControls()
             }
             m_view->setCinePlaying(false);
         }
+    }
+    if (m_exportCineAction)
+    {
+        m_exportCineAction->setEnabled(hasExportableCine);
     }
 }
 
@@ -534,6 +550,7 @@ void DicomMainWindow::displayCurrentSlice()
                      .fileName()),
         4000);
     MemoryManagementDebug::logMainViewerSnapshot(m_viewportController.get(), m_view, "displayCurrentSlice");
+    updateCineControls();
 }
 
 void DicomMainWindow::loadCurrentSliceAnnotations()
@@ -1415,6 +1432,105 @@ void DicomMainWindow::advanceCinePlayback()
 
     onImageSliderValueChanged(m_viewportController->nextCineIndex());
     m_cineTimer->setInterval(m_viewportController->cineIntervalMs());
+}
+
+void DicomMainWindow::exportCurrentCine()
+{
+    if (!m_viewportController || !m_videoExportController || m_videoExportController->isRunning())
+    {
+        return;
+    }
+
+    DicomImage* image = m_viewportController->currentImage();
+    if (!image || image->frameCount() <= 1 || image->filePath().trimmed().isEmpty())
+    {
+        m_warningDialogService->showWarning(
+            QStringLiteral("Export XA Cine"),
+            QStringLiteral("Select a multi-frame XA cine object before exporting."));
+        return;
+    }
+
+    if (!image->hasRawPixels() && !m_viewportController->ensureImageLoaded(*image))
+    {
+        m_warningDialogService->showWarning(
+            QStringLiteral("Export XA Cine"),
+            QStringLiteral("The selected XA cine source could not be decoded for export."));
+        return;
+    }
+    if (!image->isMonochrome())
+    {
+        m_warningDialogService->showWarning(
+            QStringLiteral("Export XA Cine"),
+            QStringLiteral("Phase 1 cine export currently supports monochrome XA images only."));
+        return;
+    }
+
+    VideoExportTimingSource timingSource = VideoExportTimingSource::Manual;
+    double framesPerSecond = 10.0;
+    const std::shared_ptr<const DicomInstanceMetadata> metadata = image->metadata();
+    if (metadata &&
+        !metadata->frameTimeVectorMs.empty() &&
+        image->cineFrameIntervalMs() > 0.0)
+    {
+        timingSource = VideoExportTimingSource::DicomFrameTime;
+        double totalFrameTimeMs = 0.0;
+        int validFrameTimes = 0;
+        for (double frameTimeMs : metadata->frameTimeVectorMs)
+        {
+            if (frameTimeMs > 0.0)
+            {
+                totalFrameTimeMs += frameTimeMs;
+                ++validFrameTimes;
+            }
+        }
+        const double averageFrameTimeMs = validFrameTimes > 0
+            ? totalFrameTimeMs / static_cast<double>(validFrameTimes)
+            : image->cineFrameIntervalMs();
+        framesPerSecond = 1000.0 / averageFrameTimeMs;
+    }
+    else if (image->frameTimeMs() > 0.0)
+    {
+        timingSource = VideoExportTimingSource::DicomFrameTime;
+        framesPerSecond = 1000.0 / image->frameTimeMs();
+    }
+    else if (image->cineRateFps() > 0.0)
+    {
+        timingSource = VideoExportTimingSource::DicomCineRate;
+        framesPerSecond = image->cineRateFps();
+    }
+    else if (image->cineFrameIntervalMs() > 0.0)
+    {
+        framesPerSecond = 1000.0 / image->cineFrameIntervalMs();
+    }
+
+    VideoExportController::Context context;
+    context.sourceFilePath = image->filePath();
+    context.suggestedBaseName = QFileInfo(image->filePath()).completeBaseName();
+    context.sourceSopInstanceUid = image->sopInstanceUid();
+    context.productVersion = QString::fromUtf8(AppVersion::kVersionString);
+    context.frameCount = image->frameCount();
+    context.currentFrameIndex = image->frameIndex();
+    context.frameSize = QSize(image->width(), image->height());
+    context.windowLevel = m_viewportController->currentWindowLevel();
+    context.windowWidth = m_viewportController->currentWindowWidth();
+    context.defaultFramesPerSecond = std::clamp(framesPerSecond, 1.0, 120.0);
+    context.timingSource = timingSource;
+
+    if (!m_videoExportController->startExport(context, this))
+    {
+        return;
+    }
+
+    if (m_cineTimer)
+    {
+        m_cineTimer->stop();
+    }
+    m_viewportController->setCinePlaying(false);
+    if (m_view)
+    {
+        m_view->setCinePlaying(false);
+    }
+    updateCineControls();
 }
 
 void DicomMainWindow::onLocalSearchTextChanged(const QString& text)
