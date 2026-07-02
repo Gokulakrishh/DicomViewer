@@ -470,6 +470,17 @@ target_link_libraries(${PROJECT_NAME}
         gdcmDSED
 )
 
+if(UNIX AND NOT APPLE)
+    # The local development setup can use extracted dependency packages under
+    # the build tree. DT_RPATH is intentionally transitive, unlike DT_RUNPATH,
+    # so indirect local dependencies such as GDCM sibling libraries resolve
+    # without requiring LD_LIBRARY_PATH.
+    target_link_options(${PROJECT_NAME} PRIVATE
+        "-Wl,--disable-new-dtags"
+        "-Wl,-export-dynamic"
+    )
+endif()
+
 if(DICOMVIEWER_ENABLE_VTK)
     target_link_libraries(${PROJECT_NAME} PRIVATE ${VTK_LIBRARIES})
     target_compile_definitions(${PROJECT_NAME} PRIVATE DICOMVIEWER_ENABLE_VTK=1)
@@ -617,6 +628,25 @@ add_executable(SqliteServiceSmokeTest
     src/Services/IAnnotationReportService.h
 )
 
+add_executable(FolderImportDbSmokeTest
+    tests/FolderImportDbSmokeTest.cpp
+    src/FileHandling/GDCMFileHandling.cpp
+    src/Database/SqliteConnection.cpp
+    src/Database/SqliteService.cpp
+    src/Model/DicomImage.cpp
+    src/FileHandling/FileHandling.h
+    src/FileHandling/GDCMFileHandling.h
+    src/Database/DatabaseConnection.h
+    src/Database/DatabaseService.h
+    src/Database/SqliteConnection.h
+    src/Database/SqliteService.h
+    src/Model/DicomImage.h
+    src/Model/DicomParameters.h
+    src/Model/MeasurementAnnotationRecord.h
+    src/Model/AnnotationReportSummary.h
+    src/Utilities/DatabaseSettings.h
+)
+
 add_executable(VideoExportSmokeTest
     tests/VideoExportSmokeTest.cpp
     src/Services/VideoExport/GStreamerVideoExportService.cpp
@@ -647,6 +677,25 @@ target_link_libraries(SqliteServiceSmokeTest
         Qt6::Core
         Qt6::Gui
         Qt6::Sql
+)
+
+target_include_directories(FolderImportDbSmokeTest PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${GDCM_INCLUDE_DIRS}
+    /usr/include/gdcm-3.0
+)
+
+target_link_libraries(FolderImportDbSmokeTest
+    PRIVATE
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Sql
+        Qt6::Concurrent
+        ${GDCM_LIBRARIES}
+        gdcmCommon
+        gdcmMSFF
+        gdcmIOD
+        gdcmDSED
 )
 
 if(BUILD_TESTING)

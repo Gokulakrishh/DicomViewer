@@ -21,6 +21,7 @@ CMakeLists.txt.user*
 build/
 build-*/
 cmake-build-*/
+.deps/
 artifacts/
 *.msix
 *.msixbundle

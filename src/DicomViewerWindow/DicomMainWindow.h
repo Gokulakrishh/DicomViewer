@@ -88,11 +88,16 @@ private:
     struct FolderImportResult
     {
         QString folderName;
+        int scannedFileCount{0};
+        int importableDicomFileCount{0};
+        int unsupportedFileCount{0};
+        int macOsMetadataFileCount{0};
         int importedPatientCount{0};
         bool foundImportableDicom{false};
         bool initializeSucceeded{false};
         bool hadSaveFailure{false};
         QString errorMessage;
+        QStringList unsupportedFileExamples;
     };
 
     void setUiComponents();

@@ -199,8 +199,6 @@ private:
     void populateSeries(Study& study);
     /** @brief Populates lightweight slice metadata for a loaded series. */
     void populateImages(Series& series);
-    /** @brief Creates a bounded preview pixmap from representative series data. */
-    QPixmap createSeriesPreviewPixmap(const Series& series) const;
     /** @brief Maps a SQL row into a lightweight DicomImage metadata object. */
     DicomImagePtr createImageFromQuery(const QSqlQuery& query) const;
 

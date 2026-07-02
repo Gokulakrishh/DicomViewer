@@ -2,6 +2,9 @@
 
 #include <QAction>
 #include <QBuffer>
+#include <QDebug>
+#include <QDir>
+#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QDate>
@@ -14,12 +17,11 @@
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QFutureWatcher>
+#include <QPromise>
 #include <QPlainTextEdit>
 #include <QImage>
 #include <QLabel>
 #include <QLineEdit>
-#include <QMetaObject>
-#include <QPointer>
 #include <QRegularExpression>
 #include <QSet>
 #include <QSlider>
@@ -32,6 +34,7 @@
 #include <QtConcurrent/QtConcurrent>
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 
 #include "Audit/AuditService.h"
 #include "Audit/JsonlAuditSink.h"
@@ -69,6 +72,15 @@ struct BuiltInViewportPresetMapping
     BuiltInWindowLevelPresetId builtInPreset;
 };
 
+struct FolderImportFileSummary
+{
+    int regularFileCount{0};
+    int importableDicomFileCount{0};
+    int unsupportedFileCount{0};
+    int macOsMetadataFileCount{0};
+    QStringList unsupportedFileExamples;
+};
+
 constexpr std::array<BuiltInViewportPresetMapping, 4> kBuiltInViewportPresetMappings{{
     {ViewportWindowPreset::Brain, BuiltInWindowLevelPresetId::Brain},
     {ViewportWindowPreset::SoftTissue, BuiltInWindowLevelPresetId::SoftTissue},
@@ -88,6 +100,90 @@ QString buildAdvancedViewerTitle(const QString& viewerName, const Series& select
         title += " - " + selectedSeries.modality().trimmed();
     }
     return title;
+}
+
+QString fromFilesystemPath(const std::filesystem::path& path)
+{
+#if defined(Q_OS_WIN)
+    return QString::fromStdWString(path.wstring());
+#else
+    return QString::fromStdString(path.string());
+#endif
+}
+
+bool looksLikePart10Dicom(const QString& filePath)
+{
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly))
+    {
+        return false;
+    }
+
+    return file.size() >= 132 &&
+           file.seek(128) &&
+           file.read(4) == QByteArray("DICM");
+}
+
+bool isMacOsMetadataFileName(const QString& fileName)
+{
+    return fileName == QStringLiteral(".DS_Store") ||
+           fileName.startsWith(QStringLiteral("._"));
+}
+
+FolderImportFileSummary summarizeFolderImportFiles(const QString& folderPath)
+{
+    FolderImportFileSummary summary;
+
+    std::error_code errorCode;
+#if defined(Q_OS_WIN)
+    const std::filesystem::path rootPath(folderPath.toStdWString());
+#else
+    const std::filesystem::path rootPath(folderPath.toStdString());
+#endif
+    if (!std::filesystem::exists(rootPath, errorCode) ||
+        !std::filesystem::is_directory(rootPath, errorCode))
+    {
+        return summary;
+    }
+
+    QDir rootDirectory(folderPath);
+    std::filesystem::recursive_directory_iterator iterator(
+        rootPath,
+        std::filesystem::directory_options::skip_permission_denied,
+        errorCode);
+    const std::filesystem::recursive_directory_iterator endIterator;
+    while (!errorCode && iterator != endIterator)
+    {
+        const std::filesystem::directory_entry entry = *iterator;
+        std::error_code typeError;
+        if (entry.is_regular_file(typeError))
+        {
+            const QString filePathString = fromFilesystemPath(entry.path());
+            const QString fileName = fromFilesystemPath(entry.path().filename());
+            ++summary.regularFileCount;
+
+            if (looksLikePart10Dicom(filePathString))
+            {
+                ++summary.importableDicomFileCount;
+            }
+            else
+            {
+                ++summary.unsupportedFileCount;
+                if (isMacOsMetadataFileName(fileName))
+                {
+                    ++summary.macOsMetadataFileCount;
+                }
+                if (summary.unsupportedFileExamples.size() < 5)
+                {
+                    summary.unsupportedFileExamples.append(rootDirectory.relativeFilePath(filePathString));
+                }
+            }
+        }
+
+        iterator.increment(errorCode);
+    }
+
+    return summary;
 }
 
 QString resolveAuditFilePath()
@@ -348,6 +444,29 @@ void DicomMainWindow::setupConnections()
     if (m_folderImportWatcher)
     {
         connect(m_folderImportWatcher, &QFutureWatcher<FolderImportResult>::finished, this, &DicomMainWindow::onFolderImportFinished);
+        connect(m_folderImportWatcher, &QFutureWatcher<FolderImportResult>::progressRangeChanged, this, [this](int minimum, int maximum) {
+            if (m_folderImportLoadingDialog)
+            {
+                m_folderImportLoadingDialog->setProgressRange(minimum, maximum);
+            }
+        });
+        connect(m_folderImportWatcher, &QFutureWatcher<FolderImportResult>::progressValueChanged, this, [this](int value) {
+            if (m_folderImportLoadingDialog)
+            {
+                m_folderImportLoadingDialog->setProgressValue(value);
+            }
+        });
+        connect(m_folderImportWatcher, &QFutureWatcher<FolderImportResult>::progressTextChanged, this, [this](const QString& text) {
+            if (text.trimmed().isEmpty())
+            {
+                return;
+            }
+            statusBar()->showMessage(text);
+            if (m_folderImportLoadingDialog)
+            {
+                m_folderImportLoadingDialog->setMessage(text);
+            }
+        });
     }
 
     if (m_videoExportController)
@@ -1199,61 +1318,74 @@ void DicomMainWindow::openFolder()
 
     const DatabaseSettings databaseSettings = m_appConfigService->loadDatabaseSettings();
     const QString folderPathCopy = folderPath;
-    QPointer<LoadingDialog> loadingDialog(m_folderImportLoadingDialog);
-    QPointer<DicomMainWindow> window(this);
-    QObject* progressTarget = QCoreApplication::instance();
-    m_folderImportWatcher->setFuture(QtConcurrent::run([databaseSettings, folderPathCopy, loadingDialog, window, progressTarget]() {
+    qInfo().noquote() << "[FolderImport] Starting folder import:" << folderPathCopy;
+    m_folderImportWatcher->setFuture(QtConcurrent::run([databaseSettings, folderPathCopy](QPromise<FolderImportResult>& promise) {
+        promise.setProgressRange(0, 100);
+        promise.setProgressValueAndText(0, QStringLiteral("Scanning folder..."));
+
         FolderImportResult result;
         result.folderName = QFileInfo(folderPathCopy).fileName();
-        const auto reportProgress = [loadingDialog, window, progressTarget](int value, const QString& message) {
-            if (!progressTarget)
-            {
-                return;
-            }
+        const FolderImportFileSummary fileSummary = summarizeFolderImportFiles(folderPathCopy);
+        result.scannedFileCount = fileSummary.regularFileCount;
+        result.importableDicomFileCount = fileSummary.importableDicomFileCount;
+        result.unsupportedFileCount = fileSummary.unsupportedFileCount;
+        result.macOsMetadataFileCount = fileSummary.macOsMetadataFileCount;
+        result.unsupportedFileExamples = fileSummary.unsupportedFileExamples;
 
-            QMetaObject::invokeMethod(
-                progressTarget,
-                [loadingDialog, window, value, message]() {
-                    if (window)
-                    {
-                        window->statusBar()->showMessage(message);
-                    }
-                    if (loadingDialog)
-                    {
-                        loadingDialog->setMessage(message);
-                        loadingDialog->setProgressValue(value);
-                    }
-                },
-                Qt::QueuedConnection);
-        };
+        promise.setProgressValueAndText(
+            5,
+            QString("Found %1 DICOM files; skipped %2 unsupported files.")
+                .arg(result.importableDicomFileCount)
+                .arg(result.unsupportedFileCount));
 
         GDCMFileHandling fileHandling;
         SqliteService databaseService(databaseSettings);
+        qInfo().noquote() << "[FolderImport] Worker initializing database:" << databaseSettings.filePath();
         result.initializeSucceeded = databaseService.initialize();
         if (!result.initializeSucceeded)
         {
             result.errorMessage = databaseService.lastErrorText();
-            return result;
+            qWarning().noquote() << "[FolderImport] Database initialization failed:" << result.errorMessage;
+            promise.setProgressValueAndText(100, QStringLiteral("Folder import failed."));
+            promise.addResult(result);
+            return;
         }
 
-        reportProgress(0, "Scanning DICOM files... 0%");
+        qInfo().noquote() << "[FolderImport] Worker scanning folder:" << folderPathCopy;
         const FileHandling::PatientList patients = fileHandling.loadDicomFolder(
             folderPathCopy,
-            [&reportProgress](int current, int total) {
-                const int percent = total > 0 ? std::clamp((current * 70) / total, 0, 70) : 0;
-                reportProgress(percent, QString("Scanning DICOM files... %1%").arg(percent));
+            [&promise](int current, int total) {
+                if (total > 0 && (current == total || current % 25 == 0))
+                {
+                    qInfo().noquote()
+                        << "[FolderImport] Worker scanned DICOM metadata:"
+                        << current << "/" << total;
+                }
+                const int percent = total > 0
+                    ? 5 + std::clamp((current * 65) / total, 0, 65)
+                    : 5;
+                promise.setProgressValueAndText(
+                    percent,
+                    QString("Scanning DICOM files... %1/%2").arg(current).arg(total));
             });
         result.foundImportableDicom = !patients.isEmpty();
         if (!result.foundImportableDicom)
         {
-            reportProgress(100, "No importable DICOM files found.");
-            return result;
+            qWarning().noquote() << "[FolderImport] No importable DICOM files found:" << folderPathCopy;
+            promise.setProgressValueAndText(100, QStringLiteral("No importable DICOM files found."));
+            promise.addResult(result);
+            return;
         }
+        qInfo().noquote() << "[FolderImport] Worker scan complete. Patients:" << patients.size();
 
         const int patientCount = patients.size();
         int importedIndex = 0;
         for (const auto& patient : patients)
         {
+            qInfo().noquote()
+                << "[FolderImport] Worker saving patient"
+                << (importedIndex + 1) << "/" << patientCount
+                << (patient ? patient->patientId() : QStringLiteral("<null>"));
             if (databaseService.savePatient(patient))
             {
                 ++result.importedPatientCount;
@@ -1261,11 +1393,13 @@ void DicomMainWindow::openFolder()
             else
             {
                 result.hadSaveFailure = true;
+                qWarning().noquote() << "[FolderImport] Worker failed to save patient:"
+                                     << databaseService.lastErrorText();
             }
 
             ++importedIndex;
             const int percent = 70 + (patientCount > 0 ? std::clamp((importedIndex * 30) / patientCount, 0, 30) : 30);
-            reportProgress(
+            promise.setProgressValueAndText(
                 percent,
                 QString("Importing patients... %1/%2").arg(importedIndex).arg(patientCount));
         }
@@ -1275,9 +1409,10 @@ void DicomMainWindow::openFolder()
             result.errorMessage = databaseService.lastErrorText();
         }
 
-        reportProgress(100, QString("Imported folder %1").arg(result.folderName));
+        qInfo().noquote() << "[FolderImport] Worker finished. Patients saved:" << result.importedPatientCount;
+        promise.setProgressValueAndText(100, QString("Imported folder %1").arg(result.folderName));
 
-        return result;
+        promise.addResult(result);
     }));
 }
 
@@ -1724,6 +1859,12 @@ void DicomMainWindow::onFolderImportFinished()
     }
 
     const FolderImportResult result = m_folderImportWatcher->result();
+    qInfo().noquote() << "[FolderImport] GUI received import result:"
+                      << "initialized=" << result.initializeSucceeded
+                      << "foundDicom=" << result.foundImportableDicom
+                      << "patientsSaved=" << result.importedPatientCount
+                      << "saveFailure=" << result.hadSaveFailure
+                      << "error=" << result.errorMessage;
     if (!result.initializeSucceeded)
     {
         const QString message = result.errorMessage.trimmed().isEmpty()
@@ -1736,8 +1877,13 @@ void DicomMainWindow::onFolderImportFinished()
 
     if (!result.foundImportableDicom)
     {
+        QString message = QStringLiteral("No importable DICOM files found in the selected folder.");
+        if (result.unsupportedFileCount > 0)
+        {
+            message += QString("\n\nSkipped %1 unsupported file(s).").arg(result.unsupportedFileCount);
+        }
         statusBar()->showMessage("No importable DICOM files found in folder.", 5000);
-        m_warningDialogService->showWarning("Folder Import", "No importable DICOM files found in the selected folder.");
+        m_warningDialogService->showWarning("Folder Import", message);
         return;
     }
 
@@ -1749,11 +1895,37 @@ void DicomMainWindow::onFolderImportFinished()
         m_warningDialogService->showWarning("Database Import", message);
     }
 
+    qInfo().noquote() << "[FolderImport] GUI refreshing hierarchy after folder import";
     refreshHierarchyForGlobalSearch();
+    qInfo().noquote() << "[FolderImport] GUI refreshing annotation report after folder import";
     refreshAnnotationReportDock();
-    statusBar()->showMessage(
-        QString("Imported folder %1 | Patients saved: %2").arg(result.folderName).arg(result.importedPatientCount),
-        6000);
+    qInfo().noquote() << "[FolderImport] GUI folder import finish handling complete";
+    const QString statusMessage =
+        QString("Imported folder %1 | Patients saved: %2")
+            .arg(result.folderName)
+            .arg(result.importedPatientCount);
+    statusBar()->showMessage(statusMessage, 6000);
+
+    if (result.unsupportedFileCount > 0)
+    {
+        QString message = QString("Imported %1 DICOM file(s) and skipped %2 unsupported file(s).")
+                              .arg(result.importableDicomFileCount)
+                              .arg(result.unsupportedFileCount);
+        if (result.macOsMetadataFileCount > 0)
+        {
+            message += QString("\n\n%1 skipped file(s) look like macOS metadata files, such as .DS_Store or ._* sidecar files.")
+                           .arg(result.macOsMetadataFileCount);
+        }
+        if (!result.unsupportedFileExamples.isEmpty())
+        {
+            message += QStringLiteral("\n\nExamples:\n");
+            for (const QString& example : result.unsupportedFileExamples)
+            {
+                message += QStringLiteral("- ") + example + QLatin1Char('\n');
+            }
+        }
+        m_warningDialogService->showWarning(QStringLiteral("Folder Import"), message.trimmed());
+    }
 }
 
 void DicomMainWindow::refreshHierarchyForGlobalSearch()

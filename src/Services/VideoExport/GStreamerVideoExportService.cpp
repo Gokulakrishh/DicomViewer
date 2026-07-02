@@ -2,10 +2,12 @@
 
 #include "Services/VideoExport/IVideoFrameProvider.h"
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QDateTime>
 #include <QFile>
 #include <QFileInfo>
+#include <QStringList>
 #include <QtSystemDetection>
 
 #include <gst/app/gstappsrc.h>
@@ -13,6 +15,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <numeric>
 
 namespace
@@ -141,6 +144,10 @@ QString gstreamerErrorMessage(GstMessage* message)
     return text;
 }
 
+QStringList knownGStreamerPluginDirectories();
+void scanKnownGStreamerPluginDirectories();
+bool loadKnownGStreamerPlugin(const char* factoryName);
+
 bool initializeGStreamer(QString* version, QString* errorMessage)
 {
     GError* error = nullptr;
@@ -162,6 +169,7 @@ bool initializeGStreamer(QString* version, QString* errorMessage)
     guint nano = 0;
     gst_version(&major, &minor, &micro, &nano);
     *version = QStringLiteral("%1.%2.%3").arg(major).arg(minor).arg(micro);
+    scanKnownGStreamerPluginDirectories();
     if (major != 1 || minor != 24)
     {
         *errorMessage = QStringLiteral(
@@ -174,6 +182,12 @@ bool initializeGStreamer(QString* version, QString* errorMessage)
 GstElement* makeElement(const char* factoryName, const char* elementName, QString* errorMessage)
 {
     GstElement* element = gst_element_factory_make(factoryName, elementName);
+#if defined(Q_OS_LINUX)
+    if (!element && loadKnownGStreamerPlugin(factoryName))
+    {
+        element = gst_element_factory_make(factoryName, elementName);
+    }
+#endif
     if (!element && errorMessage && errorMessage->isEmpty())
     {
         *errorMessage = QStringLiteral("Required GStreamer element is unavailable: %1")
@@ -182,12 +196,129 @@ GstElement* makeElement(const char* factoryName, const char* elementName, QStrin
     return element;
 }
 
+QStringList knownGStreamerPluginDirectories()
+{
+    QStringList candidateDirectories;
+#if defined(Q_OS_LINUX)
+    const QString applicationDirectory = QCoreApplication::applicationDirPath();
+    candidateDirectories = {
+        QDir::cleanPath(applicationDirectory +
+                        QStringLiteral("/../.deps/root/usr/lib/x86_64-linux-gnu/gstreamer-1.0")),
+        QDir::cleanPath(applicationDirectory +
+                        QStringLiteral("/../../.deps/root/usr/lib/x86_64-linux-gnu/gstreamer-1.0")),
+        QStringLiteral("/usr/lib/x86_64-linux-gnu/gstreamer-1.0"),
+        QStringLiteral("/usr/local/lib/x86_64-linux-gnu/gstreamer-1.0"),
+        QStringLiteral("/usr/lib/gstreamer-1.0"),
+        QStringLiteral("/usr/local/lib/gstreamer-1.0"),
+    };
+#endif
+    return candidateDirectories;
+}
+
+void scanKnownGStreamerPluginDirectories()
+{
+#if defined(Q_OS_LINUX)
+    GstRegistry* registry = gst_registry_get();
+    QStringList scannedDirectories;
+    for (const QString& candidateDirectory : knownGStreamerPluginDirectories())
+    {
+        if (candidateDirectory.isEmpty() ||
+            scannedDirectories.contains(candidateDirectory) ||
+            !QDir(candidateDirectory).exists())
+        {
+            continue;
+        }
+
+        const QByteArray pathUtf8 = candidateDirectory.toUtf8();
+        gst_registry_scan_path(registry, pathUtf8.constData());
+        scannedDirectories.append(candidateDirectory);
+    }
+#endif
+}
+
+const char* knownGStreamerPluginFileName(const char* factoryName)
+{
+#if defined(Q_OS_LINUX)
+    if (std::strcmp(factoryName, "appsrc") == 0)
+    {
+        return "libgstapp.so";
+    }
+    if (std::strcmp(factoryName, "videoconvert") == 0)
+    {
+        return "libgstvideoconvertscale.so";
+    }
+    if (std::strcmp(factoryName, "textoverlay") == 0)
+    {
+        return "libgstpango.so";
+    }
+    if (std::strcmp(factoryName, "capsfilter") == 0 ||
+        std::strcmp(factoryName, "filesink") == 0)
+    {
+        return "libgstcoreelements.so";
+    }
+    if (std::strcmp(factoryName, "h264parse") == 0)
+    {
+        return "libgstvideoparsersbad.so";
+    }
+    if (std::strcmp(factoryName, "mp4mux") == 0)
+    {
+        return "libgstisomp4.so";
+    }
+    if (std::strcmp(factoryName, "x264enc") == 0)
+    {
+        return "libgstx264.so";
+    }
+#else
+    Q_UNUSED(factoryName);
+#endif
+    return nullptr;
+}
+
+bool loadKnownGStreamerPlugin(const char* factoryName)
+{
+#if defined(Q_OS_LINUX)
+    const char* pluginFileName = knownGStreamerPluginFileName(factoryName);
+    if (!pluginFileName)
+    {
+        return false;
+    }
+
+    for (const QString& candidateDirectory : knownGStreamerPluginDirectories())
+    {
+        const QString pluginPath = QDir(candidateDirectory).filePath(
+            QString::fromLatin1(pluginFileName));
+        if (!QFileInfo::exists(pluginPath))
+        {
+            continue;
+        }
+
+        GError* error = nullptr;
+        const QByteArray pluginPathUtf8 = pluginPath.toUtf8();
+        GstPlugin* plugin = gst_plugin_load_file(pluginPathUtf8.constData(), &error);
+        if (error)
+        {
+            g_error_free(error);
+        }
+        if (plugin)
+        {
+            gst_object_unref(plugin);
+            return true;
+        }
+    }
+#else
+    Q_UNUSED(factoryName);
+#endif
+    return false;
+}
+
 PlatformEncoder platformEncoder()
 {
 #if defined(Q_OS_MACOS)
     return {"vtenc_h264", "h264-videotoolbox-encoder", "Apple VideoToolbox H.264"};
 #elif defined(Q_OS_WIN)
     return {"mfh264enc", "h264-media-foundation-encoder", "Microsoft Media Foundation H.264"};
+#elif defined(Q_OS_LINUX)
+    return {"x264enc", "h264-x264-encoder", "x264 H.264"};
 #else
     return {};
 #endif
@@ -237,6 +368,29 @@ void configureEncoder(
     if (hasProperty(encoder, "rc-mode"))
     {
         gst_util_set_object_arg(G_OBJECT(encoder), "rc-mode", "cbr");
+    }
+#elif defined(Q_OS_LINUX)
+    Q_UNUSED(platform);
+    g_object_set(
+        encoder,
+        "bitrate",
+        static_cast<guint>(VideoExportPolicy::TargetBitrateKbps),
+        "key-int-max",
+        static_cast<guint>(keyframeIntervalFrames),
+        "bframes",
+        static_cast<guint>(0),
+        "cabac",
+        FALSE,
+        "byte-stream",
+        FALSE,
+        nullptr);
+    if (hasProperty(encoder, "speed-preset"))
+    {
+        gst_util_set_object_arg(G_OBJECT(encoder), "speed-preset", "veryfast");
+    }
+    if (hasProperty(encoder, "tune"))
+    {
+        gst_util_set_object_arg(G_OBJECT(encoder), "tune", "zerolatency");
     }
 #else
     Q_UNUSED(encoder);

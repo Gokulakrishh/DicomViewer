@@ -1325,7 +1325,7 @@ bool SqliteService::saveStudy(const QString& patientId, const Study& study)
 
 bool SqliteService::saveSeries(const QString& studyInstanceUid, const Series& series)
 {
-    const QByteArray previewPng = encodePreviewPixmap(createSeriesPreviewPixmap(series));
+    const QByteArray previewPng;
 
     QSqlQuery query(m_connection->database());
     const QString previewUpdateClause =
@@ -1508,20 +1508,4 @@ DatabaseService::DicomImagePtr SqliteService::createImageFromQuery(const QSqlQue
     image->setDimensions(query.value("image_width").toInt(), query.value("image_height").toInt());
 
     return image;
-}
-
-QPixmap SqliteService::createSeriesPreviewPixmap(const Series& series) const
-{
-    if (!series.previewPixmap().isNull())
-    {
-        return series.previewPixmap();
-    }
-
-    const auto& images = series.images();
-    if (!images.empty() && images.front())
-    {
-        return images.front()->pixmap();
-    }
-
-    return QPixmap();
 }

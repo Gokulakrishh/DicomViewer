@@ -3,6 +3,7 @@
 #include "AppVersion.h"
 #include "Utilities/ApplicationPaths.h"
 
+#include <QByteArray>
 #include <QDateTime>
 #include <QDebug>
 #include <QDir>
@@ -38,6 +39,7 @@
 #include <dbghelp.h>
 #endif
 #else
+#include <execinfo.h>
 #include <unistd.h>
 #endif
 
@@ -48,6 +50,7 @@ constexpr qsizetype kMaxStoredPathLength = 2048;
 QtMessageHandler g_previousQtMessageHandler = nullptr;
 std::mutex g_logMutex;
 std::atomic_bool g_crashReportInProgress{false};
+std::atomic_bool g_consoleLoggingEnabled{false};
 QString g_applicationLogPath;
 QString g_crashReportDirectory;
 std::array<char, kMaxStoredPathLength> g_crashDirectoryBytes{};
@@ -78,6 +81,29 @@ const char* messageTypeName(QtMsgType type)
     }
 
     return "unknown";
+}
+
+bool environmentFlagEnabled(const char* name)
+{
+    const char* value = std::getenv(name);
+    if (!value)
+    {
+        return false;
+    }
+
+    const QByteArray normalized = QByteArray(value).trimmed().toLower();
+    return !normalized.isEmpty() &&
+           normalized != "0" &&
+           normalized != "false" &&
+           normalized != "no" &&
+           normalized != "off";
+}
+
+bool shouldForwardToConsole(QtMsgType type)
+{
+    return g_consoleLoggingEnabled.load(std::memory_order_relaxed) ||
+           type == QtCriticalMsg ||
+           type == QtFatalMsg;
 }
 
 void appendToApplicationLog(QtMsgType type, const QMessageLogContext& context, const QString& message)
@@ -119,11 +145,11 @@ void qtMessageHandler(QtMsgType type, const QMessageLogContext& context, const Q
 {
     appendToApplicationLog(type, context, message);
 
-    if (g_previousQtMessageHandler)
+    if (shouldForwardToConsole(type) && g_previousQtMessageHandler)
     {
         g_previousQtMessageHandler(type, context, message);
     }
-    else
+    else if (shouldForwardToConsole(type))
     {
         const QByteArray localMessage = message.toLocal8Bit();
         std::fprintf(stderr, "[%s] %s\n", messageTypeName(type), localMessage.constData());
@@ -297,6 +323,27 @@ bool writeWindowsMiniDump(EXCEPTION_POINTERS* exceptionPointers, const char* tim
 }
 #endif
 
+#if !defined(Q_OS_WIN)
+void writeLinuxBacktrace(std::FILE* file)
+{
+    if (!file)
+    {
+        return;
+    }
+
+    void* frames[64]{};
+    const int frameCount = ::backtrace(frames, static_cast<int>(std::size(frames)));
+    std::fprintf(file, "\nBacktrace:\n");
+    if (frameCount <= 0)
+    {
+        std::fprintf(file, "unavailable\n");
+        return;
+    }
+
+    ::backtrace_symbols_fd(frames, frameCount, fileno(file));
+}
+#endif
+
 void writeCrashReport(
     const char* reason,
     const char* detail
@@ -377,6 +424,9 @@ void writeCrashReport(
     }
 #endif
     std::fprintf(file, "Application log: %s\n", g_applicationLogPathBytes.data());
+#if !defined(Q_OS_WIN)
+    writeLinuxBacktrace(file);
+#endif
     std::fprintf(file, "\nNotes:\n");
     std::fprintf(file, "- This is a best-effort local crash report.\n");
     std::fprintf(file, "- Check the application log for messages immediately before the crash.\n");
@@ -445,6 +495,9 @@ void CrashReportService::install()
 {
     g_crashReportDirectory = ApplicationPaths::crashReportDirectory();
     g_applicationLogPath = ApplicationPaths::applicationLogFilePath();
+    g_consoleLoggingEnabled.store(
+        environmentFlagEnabled("DICOMVIEWER_CONSOLE_LOGGING"),
+        std::memory_order_relaxed);
 
     storePathForCrashHandler(g_crashReportDirectory, g_crashDirectoryBytes);
     storePathForCrashHandler(g_applicationLogPath, g_applicationLogPathBytes);
