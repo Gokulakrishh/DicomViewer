@@ -8,7 +8,7 @@ class QLineEdit;
 class QSpinBox;
 
 /**
- * @brief Collects the bounded Phase 1 XA cine export request.
+ * @brief Collects the bounded Phase 1 cine/video export request.
  *
  * Responsibilities:
  * - Present frame range, frame rate, timing source, and output location.
@@ -26,7 +26,9 @@ public:
     {
         QString suggestedBaseName;
         QString sourceSopInstanceUid;
+        QString sourceSeriesInstanceUid;
         QString productVersion;
+        VideoExportSourceKind sourceKind{VideoExportSourceKind::MultiFrameSop};
         int frameCount{0};
         int currentFrameIndex{0};
         double defaultFramesPerSecond{10.0};

@@ -69,7 +69,7 @@ bool DicomCineFrameProvider::visitFrames(
                 if (visitorError)
                 {
                     *visitorError = QStringLiteral(
-                        "Phase 1 cine export supports monochrome XA frames only.");
+                        "Phase 1 cine export supports monochrome DICOM frames only.");
                 }
                 return false;
             }

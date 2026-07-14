@@ -35,6 +35,7 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <vector>
 
 #include "Audit/AuditService.h"
 #include "Audit/JsonlAuditSink.h"
@@ -52,6 +53,7 @@
 #include "Utilities/IWarningDialogService.h"
 #include "Database/SqliteService.h"
 #include "FileHandling/GDCMFileHandling.h"
+#include "Model/DicomParameters.h"
 #include "Model/MedicalImage.h"
 #include "ViewerTools/WindowLevelPreset.h"
 #include "Services/AnnotationReportService.h"
@@ -128,6 +130,59 @@ bool isMacOsMetadataFileName(const QString& fileName)
 {
     return fileName == QStringLiteral(".DS_Store") ||
            fileName.startsWith(QStringLiteral("._"));
+}
+
+int exportableSliceCount(const Series& series)
+{
+    int count = 0;
+    for (const auto& image : series.images())
+    {
+        if (image && image->frameCount() == 1 && !image->filePath().trimmed().isEmpty())
+        {
+            ++count;
+        }
+    }
+    return count;
+}
+
+std::vector<VideoExportFrameSource> buildSliceSeriesFrameSources(const Series& series)
+{
+    std::vector<VideoExportFrameSource> sources;
+    sources.reserve(series.images().size());
+    for (const auto& image : series.images())
+    {
+        if (!image || image->frameCount() != 1 || image->filePath().trimmed().isEmpty())
+        {
+            continue;
+        }
+
+        VideoExportFrameSource source;
+        source.filePath = image->filePath();
+        source.sopInstanceUid = image->sopInstanceUid();
+        source.sourceFrameIndex = image->frameIndex();
+        sources.push_back(std::move(source));
+    }
+    return sources;
+}
+
+QString videoExportBaseNameForSeries(const Series& series)
+{
+    QString baseName = series.seriesDescription().trimmed();
+    if (baseName.isEmpty())
+    {
+        baseName = series.seriesNumber().trimmed();
+    }
+    if (baseName.isEmpty())
+    {
+        baseName = series.seriesInstanceUid().trimmed();
+    }
+    if (baseName.isEmpty())
+    {
+        baseName = QStringLiteral("slice-series");
+    }
+
+    baseName.replace(QRegularExpression(QStringLiteral("[\\\\/:*?\"<>|]+")), QStringLiteral("_"));
+    return baseName;
 }
 
 FolderImportFileSummary summarizeFolderImportFiles(const QString& folderPath)
@@ -394,7 +449,7 @@ void DicomMainWindow::setupViewerToolbar()
         style()->standardIcon(QStyle::SP_DialogSaveButton),
         QStringLiteral("Export Cine"),
         this);
-    m_exportCineAction->setToolTip(QStringLiteral("Export selected XA cine frames"));
+    m_exportCineAction->setToolTip(QStringLiteral("Export selected cine or slice-series frames"));
     m_exportCineAction->setEnabled(false);
     m_viewerToolBar->addAction(m_exportCineAction);
     connect(m_exportCineAction, &QAction::triggered, this, &DicomMainWindow::exportCurrentCine);
@@ -473,9 +528,9 @@ void DicomMainWindow::setupConnections()
     {
         connect(m_videoExportController, &VideoExportController::runningChanged, this, [this](bool) { updateCineControls(); });
         connect(m_videoExportController, &VideoExportController::exportSucceeded, this, [this](const QString& message) { statusBar()->showMessage(message, 8000); });
-        connect(m_videoExportController, &VideoExportController::exportCancelled, this, [this]() { statusBar()->showMessage(QStringLiteral("XA cine export cancelled."), 5000); });
+        connect(m_videoExportController, &VideoExportController::exportCancelled, this, [this]() { statusBar()->showMessage(QStringLiteral("Video export cancelled."), 5000); });
         connect(m_videoExportController, &VideoExportController::exportFailed, this, [this](const QString& message) { statusBar()->showMessage(message, 8000);
-                m_warningDialogService->showWarning(QStringLiteral("Export XA Cine"), message);
+                m_warningDialogService->showWarning(QStringLiteral("Export Cine"), message);
             });
     }
 
@@ -567,10 +622,16 @@ void DicomMainWindow::updateCineControls()
 {
     const bool hasPlayableSeries = m_viewportController && m_viewportController->hasPlayableSeries();
     const DicomImage* currentImage = m_viewportController ? m_viewportController->currentImage() : nullptr;
-    const bool hasExportableCine =
+    const auto currentSeries = m_viewportController ? m_viewportController->currentSeries() : nullptr;
+    const bool hasExportableMultiFrame =
         currentImage &&
         currentImage->frameCount() > 1 &&
-        !currentImage->filePath().trimmed().isEmpty() &&
+        !currentImage->filePath().trimmed().isEmpty();
+    const bool hasExportableSliceSeries =
+        currentSeries &&
+        exportableSliceCount(*currentSeries) > 1;
+    const bool hasExportableCine =
+        (hasExportableMultiFrame || hasExportableSliceSeries) &&
         (!m_videoExportController || !m_videoExportController->isRunning());
 
     if (m_view)
@@ -1577,79 +1638,126 @@ void DicomMainWindow::exportCurrentCine()
     }
 
     DicomImage* image = m_viewportController->currentImage();
-    if (!image || image->frameCount() <= 1 || image->filePath().trimmed().isEmpty())
-    {
-        m_warningDialogService->showWarning(
-            QStringLiteral("Export XA Cine"),
-            QStringLiteral("Select a multi-frame XA cine object before exporting."));
-        return;
-    }
+    const auto currentSeries = m_viewportController->currentSeries();
+    const bool exportMultiFrame =
+        image &&
+        image->frameCount() > 1 &&
+        !image->filePath().trimmed().isEmpty();
+    const bool exportSliceSeries =
+        !exportMultiFrame &&
+        currentSeries &&
+        exportableSliceCount(*currentSeries) > 1;
 
-    if (!image->hasRawPixels() && !m_viewportController->ensureImageLoaded(*image))
+    if (!exportMultiFrame && !exportSliceSeries)
     {
         m_warningDialogService->showWarning(
-            QStringLiteral("Export XA Cine"),
-            QStringLiteral("The selected XA cine source could not be decoded for export."));
+            QStringLiteral("Export Cine"),
+            QStringLiteral("Select a multi-frame cine object or multi-slice CT/MR series before exporting."));
         return;
-    }
-    if (!image->isMonochrome())
-    {
-        m_warningDialogService->showWarning(
-            QStringLiteral("Export XA Cine"),
-            QStringLiteral("Phase 1 cine export currently supports monochrome XA images only."));
-        return;
-    }
-
-    VideoExportTimingSource timingSource = VideoExportTimingSource::Manual;
-    double framesPerSecond = 10.0;
-    const std::shared_ptr<const DicomInstanceMetadata> metadata = image->metadata();
-    if (metadata &&
-        !metadata->frameTimeVectorMs.empty() &&
-        image->cineFrameIntervalMs() > 0.0)
-    {
-        timingSource = VideoExportTimingSource::DicomFrameTime;
-        double totalFrameTimeMs = 0.0;
-        int validFrameTimes = 0;
-        for (double frameTimeMs : metadata->frameTimeVectorMs)
-        {
-            if (frameTimeMs > 0.0)
-            {
-                totalFrameTimeMs += frameTimeMs;
-                ++validFrameTimes;
-            }
-        }
-        const double averageFrameTimeMs = validFrameTimes > 0
-            ? totalFrameTimeMs / static_cast<double>(validFrameTimes)
-            : image->cineFrameIntervalMs();
-        framesPerSecond = 1000.0 / averageFrameTimeMs;
-    }
-    else if (image->frameTimeMs() > 0.0)
-    {
-        timingSource = VideoExportTimingSource::DicomFrameTime;
-        framesPerSecond = 1000.0 / image->frameTimeMs();
-    }
-    else if (image->cineRateFps() > 0.0)
-    {
-        timingSource = VideoExportTimingSource::DicomCineRate;
-        framesPerSecond = image->cineRateFps();
-    }
-    else if (image->cineFrameIntervalMs() > 0.0)
-    {
-        framesPerSecond = 1000.0 / image->cineFrameIntervalMs();
     }
 
     VideoExportController::Context context;
-    context.sourceFilePath = image->filePath();
-    context.suggestedBaseName = QFileInfo(image->filePath()).completeBaseName();
-    context.sourceSopInstanceUid = image->sopInstanceUid();
     context.productVersion = QString::fromUtf8(AppVersion::kVersionString);
-    context.frameCount = image->frameCount();
-    context.currentFrameIndex = image->frameIndex();
-    context.frameSize = QSize(image->width(), image->height());
     context.windowLevel = m_viewportController->currentWindowLevel();
     context.windowWidth = m_viewportController->currentWindowWidth();
-    context.defaultFramesPerSecond = std::clamp(framesPerSecond, 1.0, 120.0);
-    context.timingSource = timingSource;
+
+    if (exportMultiFrame)
+    {
+        if (!image->hasRawPixels() && !m_viewportController->ensureImageLoaded(*image))
+        {
+            m_warningDialogService->showWarning(
+                QStringLiteral("Export Cine"),
+                QStringLiteral("The selected cine source could not be decoded for export."));
+            return;
+        }
+        if (!image->isMonochrome())
+        {
+            m_warningDialogService->showWarning(
+                QStringLiteral("Export Cine"),
+                QStringLiteral("Phase 1 cine export currently supports monochrome DICOM images only."));
+            return;
+        }
+
+        VideoExportTimingSource timingSource = VideoExportTimingSource::Manual;
+        double framesPerSecond = 10.0;
+        const std::shared_ptr<const DicomInstanceMetadata> metadata = image->metadata();
+        if (metadata &&
+            !metadata->frameTimeVectorMs.empty() &&
+            image->cineFrameIntervalMs() > 0.0)
+        {
+            timingSource = VideoExportTimingSource::DicomFrameTime;
+            double totalFrameTimeMs = 0.0;
+            int validFrameTimes = 0;
+            for (double frameTimeMs : metadata->frameTimeVectorMs)
+            {
+                if (frameTimeMs > 0.0)
+                {
+                    totalFrameTimeMs += frameTimeMs;
+                    ++validFrameTimes;
+                }
+            }
+            const double averageFrameTimeMs = validFrameTimes > 0
+                ? totalFrameTimeMs / static_cast<double>(validFrameTimes)
+                : image->cineFrameIntervalMs();
+            framesPerSecond = 1000.0 / averageFrameTimeMs;
+        }
+        else if (image->frameTimeMs() > 0.0)
+        {
+            timingSource = VideoExportTimingSource::DicomFrameTime;
+            framesPerSecond = 1000.0 / image->frameTimeMs();
+        }
+        else if (image->cineRateFps() > 0.0)
+        {
+            timingSource = VideoExportTimingSource::DicomCineRate;
+            framesPerSecond = image->cineRateFps();
+        }
+        else if (image->cineFrameIntervalMs() > 0.0)
+        {
+            framesPerSecond = 1000.0 / image->cineFrameIntervalMs();
+        }
+
+        context.sourceKind = VideoExportSourceKind::MultiFrameSop;
+        context.sourceFilePath = image->filePath();
+        context.suggestedBaseName = QFileInfo(image->filePath()).completeBaseName();
+        context.sourceSopInstanceUid = image->sopInstanceUid();
+        context.sourceSeriesInstanceUid = currentSeries ? currentSeries->seriesInstanceUid() : QString();
+        context.frameCount = image->frameCount();
+        context.currentFrameIndex = image->frameIndex();
+        context.frameSize = QSize(image->width(), image->height());
+        context.defaultFramesPerSecond = std::clamp(framesPerSecond, 1.0, 120.0);
+        context.timingSource = timingSource;
+    }
+    else
+    {
+        std::vector<VideoExportFrameSource> frameSources = buildSliceSeriesFrameSources(*currentSeries);
+        QSize frameSize = image ? QSize(image->width(), image->height()) : QSize();
+        if ((!frameSize.isValid() || frameSize.isEmpty()) && image)
+        {
+            m_viewportController->ensureImageLoaded(*image);
+            frameSize = QSize(image->width(), image->height());
+        }
+        if (frameSources.size() <= 1 || !frameSize.isValid() || frameSize.isEmpty())
+        {
+            m_warningDialogService->showWarning(
+                QStringLiteral("Export Cine"),
+                QStringLiteral("The selected slice series is incomplete and cannot be exported."));
+            return;
+        }
+
+        context.sourceKind = VideoExportSourceKind::SliceSeries;
+        context.frameSources = std::move(frameSources);
+        context.sourceSopInstanceUid = image ? image->sopInstanceUid() : QString();
+        context.sourceSeriesInstanceUid = currentSeries->seriesInstanceUid();
+        context.suggestedBaseName = videoExportBaseNameForSeries(*currentSeries);
+        context.frameCount = static_cast<int>(context.frameSources.size());
+        context.currentFrameIndex = std::clamp(
+            m_viewportController->currentImageIndex(),
+            0,
+            context.frameCount - 1);
+        context.frameSize = frameSize;
+        context.defaultFramesPerSecond = 10.0;
+        context.timingSource = VideoExportTimingSource::Manual;
+    }
 
     if (!m_videoExportController->startExport(context, this))
     {

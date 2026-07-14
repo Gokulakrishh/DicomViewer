@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <memory>
+#include <vector>
 
 class IAuditService;
 class IVideoExportService;
@@ -15,7 +16,7 @@ class QProgressDialog;
 class QWidget;
 
 /**
- * @brief Coordinates the main-view XA cine export presentation workflow.
+ * @brief Coordinates the main-view cine/video export presentation workflow.
  *
  * Responsibilities:
  * - Collect an export request through the dedicated dialog.
@@ -35,8 +36,11 @@ public:
     {
         QString sourceFilePath;
         QString sourceSopInstanceUid;
+        QString sourceSeriesInstanceUid;
         QString suggestedBaseName;
         QString productVersion;
+        VideoExportSourceKind sourceKind{VideoExportSourceKind::MultiFrameSop};
+        std::vector<VideoExportFrameSource> frameSources;
         int frameCount{0};
         int currentFrameIndex{0};
         QSize frameSize;

@@ -5,7 +5,9 @@
 #include "DicomViewerWindow/VideoExportDialog.h"
 #include "FileHandling/GDCMFileHandling.h"
 #include "Services/VideoExport/DicomCineFrameProvider.h"
+#include "Services/VideoExport/DicomSeriesFrameProvider.h"
 #include "Services/VideoExport/IVideoExportService.h"
+#include "Services/VideoExport/IVideoFrameProvider.h"
 
 #include <QApplication>
 #include <QDialog>
@@ -64,8 +66,11 @@ bool VideoExportController::isRunning() const
 
 bool VideoExportController::startExport(const Context& context, QWidget* parentWidget)
 {
-    if (!m_exportService || isRunning() || context.sourceFilePath.trimmed().isEmpty() ||
-        context.frameCount <= 1 || !context.frameSize.isValid())
+    const bool hasSource = context.sourceKind == VideoExportSourceKind::SliceSeries
+        ? !context.frameSources.empty()
+        : !context.sourceFilePath.trimmed().isEmpty();
+    if (!m_exportService || isRunning() || !hasSource || context.frameCount <= 1 ||
+        !context.frameSize.isValid())
     {
         return false;
     }
@@ -73,7 +78,9 @@ bool VideoExportController::startExport(const Context& context, QWidget* parentW
     VideoExportDialog::Context dialogContext;
     dialogContext.suggestedBaseName = context.suggestedBaseName;
     dialogContext.sourceSopInstanceUid = context.sourceSopInstanceUid;
+    dialogContext.sourceSeriesInstanceUid = context.sourceSeriesInstanceUid;
     dialogContext.productVersion = context.productVersion;
+    dialogContext.sourceKind = context.sourceKind;
     dialogContext.frameCount = context.frameCount;
     dialogContext.currentFrameIndex = context.currentFrameIndex;
     dialogContext.defaultFramesPerSecond = context.defaultFramesPerSecond;
@@ -90,12 +97,12 @@ bool VideoExportController::startExport(const Context& context, QWidget* parentW
     const std::shared_ptr<std::atomic_bool> cancellation = m_cancellation;
 
     m_progressDialog = new QProgressDialog(
-        QStringLiteral("Preparing XA cine export..."),
+        QStringLiteral("Preparing video export..."),
         QStringLiteral("Cancel"),
         0,
         m_activeRequest.lastFrameIndex - m_activeRequest.firstFrameIndex + 1,
         parentWidget);
-    m_progressDialog->setWindowTitle(QStringLiteral("Export XA Cine"));
+    m_progressDialog->setWindowTitle(QStringLiteral("Export Cine"));
     m_progressDialog->setWindowModality(Qt::ApplicationModal);
     m_progressDialog->setMinimumDuration(0);
     m_progressDialog->setAutoClose(false);
@@ -113,17 +120,30 @@ bool VideoExportController::startExport(const Context& context, QWidget* parentW
     m_watcher.setFuture(QtConcurrent::run(
         [this, request, context, exportService, cancellation]() {
             GDCMFileHandling fileHandling;
-            DicomCineFrameProvider frameProvider(
-                fileHandling,
-                context.sourceFilePath,
-                context.frameCount,
-                context.frameSize,
-                context.windowLevel,
-                context.windowWidth);
+            std::unique_ptr<IVideoFrameProvider> frameProvider;
+            if (context.sourceKind == VideoExportSourceKind::SliceSeries)
+            {
+                frameProvider = std::make_unique<DicomSeriesFrameProvider>(
+                    fileHandling,
+                    context.frameSources,
+                    context.frameSize,
+                    context.windowLevel,
+                    context.windowWidth);
+            }
+            else
+            {
+                frameProvider = std::make_unique<DicomCineFrameProvider>(
+                    fileHandling,
+                    context.sourceFilePath,
+                    context.frameCount,
+                    context.frameSize,
+                    context.windowLevel,
+                    context.windowWidth);
+            }
 
             return exportService->exportVideo(
                 request,
-                frameProvider,
+                *frameProvider,
                 [this](int completedFrames, int totalFrames) {
                     emit progressChanged(completedFrames, totalFrames);
                 },
@@ -159,7 +179,7 @@ void VideoExportController::finishExport()
     {
         emit exportFailed(
             result.errorMessage.trimmed().isEmpty()
-                ? QStringLiteral("XA cine video export failed.")
+                ? QStringLiteral("Video export failed.")
                 : result.errorMessage);
     }
 }
@@ -182,12 +202,17 @@ void VideoExportController::recordAudit(
     event.action = result.success
         ? QStringLiteral("ExportCompleted")
         : (result.cancelled ? QStringLiteral("ExportCancelled") : QStringLiteral("ExportFailed"));
-    event.subjectId = request.sourceSopInstanceUid;
+    event.subjectId = request.sourceKind == VideoExportSourceKind::SliceSeries
+        ? request.sourceSeriesInstanceUid
+        : request.sourceSopInstanceUid;
     event.message = result.success
-        ? QStringLiteral("Derived non-diagnostic XA cine video export completed.")
+        ? QStringLiteral("Derived non-diagnostic cine video export completed.")
         : (result.cancelled
-               ? QStringLiteral("Derived non-diagnostic XA cine video export was cancelled.")
-               : QStringLiteral("Derived non-diagnostic XA cine video export failed."));
+               ? QStringLiteral("Derived non-diagnostic cine video export was cancelled.")
+               : QStringLiteral("Derived non-diagnostic cine video export failed."));
+    event.attributes.insert(QStringLiteral("sourceKind"), videoExportSourceKindName(request.sourceKind));
+    event.attributes.insert(QStringLiteral("sourceSopInstanceUid"), request.sourceSopInstanceUid);
+    event.attributes.insert(QStringLiteral("sourceSeriesInstanceUid"), request.sourceSeriesInstanceUid);
     event.attributes.insert(
         QStringLiteral("frameRange"),
         QStringLiteral("%1-%2").arg(request.firstFrameIndex).arg(request.lastFrameIndex));

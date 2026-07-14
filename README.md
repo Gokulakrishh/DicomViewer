@@ -1,6 +1,6 @@
 # Cross Axial Dicom Viewer
 
-Cross Axial Dicom Viewer is a `Qt 6` / `C++20` desktop application for browsing and viewing DICOM studies with local SQLite-backed hierarchy indexing, a VTK-based main viewer, VTK-based MPR, annotation workflows, and XA cine playback/export support. The current codebase is a professional-grade desktop viewer foundation aimed at scaling to larger datasets and richer clinical-style workflows.
+Cross Axial Dicom Viewer is a `Qt 6` / `C++20` desktop application for browsing and viewing DICOM studies with local SQLite-backed hierarchy indexing, a VTK-based main viewer, VTK-based MPR, annotation workflows, XA cine playback, and DICOM cine/slice-series video export support. The current codebase is a professional-grade desktop viewer foundation aimed at scaling to larger datasets and richer clinical-style workflows.
 
 Current public/demo scope: educational, research, and internal evaluation use only. This software is not currently cleared or approved for diagnosis, treatment, or clinical decision-making.
 
@@ -11,7 +11,7 @@ Current public/demo scope: educational, research, and internal evaluation use on
 - raw grayscale rendering with DICOM/default `WL/WW`
 - slice scrolling and cine playback
 - multi-frame XA cine playback
-- selected-range XA cine export to derived non-diagnostic MP4/H.264 video through `GStreamer 1.24.x`
+- selected-range XA cine and CT/MR slice-series export to derived non-diagnostic MP4/H.264 video through `GStreamer 1.24.x`
 - VTK MPR viewer with synchronized axial / coronal / sagittal panes and a 3D reference pane
 - VTK 3D rendering in progress, with QML 3D kept as a transitional surface-view path
 - local SQLite metadata, preview, slice, and annotation persistence
@@ -97,15 +97,16 @@ After launch:
 2. Let the app import metadata into the local SQLite database.
 3. Browse patients, studies, and series from the left tree.
 4. Select a series to load it into the VTK main viewer.
-5. Use the toolbar for zoom/pan, WL/WW, measurement, annotation, cine playback, and XA cine export.
+5. Use the toolbar for zoom/pan, WL/WW, measurement, annotation, cine playback, and cine/slice-series export.
 6. Use `View -> Open MPR` for VTK-based multi-planar reconstruction on multi-slice series.
 7. Use `View -> 3D` for 3D reconstruction workflows.
 
 ## Video Export
 
-XA cine export creates a derived, non-diagnostic MP4/H.264 file from the selected multi-frame XA object. The export path:
+Video export creates a derived, non-diagnostic MP4/H.264 file from the selected multi-frame cine object or CT/MR slice series. The export path:
 
 - uses the current DICOM cine timing when available
+- uses a controlled manual FPS default for slice-series exports when no DICOM cine timing exists
 - applies the current WL/WW rendering
 - excludes patient-identifying overlays from the generated video
 - adds a non-diagnostic watermark

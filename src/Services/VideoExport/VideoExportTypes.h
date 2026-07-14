@@ -25,6 +25,28 @@ enum class VideoExportTimingSource
 };
 
 /**
+ * @brief Identifies the DICOM source shape used for a derived video export.
+ */
+enum class VideoExportSourceKind
+{
+    MultiFrameSop,
+    SliceSeries
+};
+
+/**
+ * @brief Lightweight reference to one source frame in a slice-series export.
+ *
+ * The structure carries identifiers and file references only. It does not own
+ * decoded pixels, rendered images, or patient display overlays.
+ */
+struct VideoExportFrameSource
+{
+    QString filePath;
+    QString sopInstanceUid;
+    int sourceFrameIndex{0};
+};
+
+/**
  * @brief Immutable input parameters for one derived cine export.
  *
  * Responsibilities:
@@ -40,7 +62,9 @@ struct VideoExportRequest
 {
     QString outputPath;
     QString sourceSopInstanceUid;
+    QString sourceSeriesInstanceUid;
     QString productVersion;
+    VideoExportSourceKind sourceKind{VideoExportSourceKind::MultiFrameSop};
     int firstFrameIndex{0};
     int lastFrameIndex{0};
     double framesPerSecond{10.0};
@@ -87,6 +111,24 @@ inline QString videoExportTimingSourceName(VideoExportTimingSource source)
         return QStringLiteral("DICOM Cine Rate");
     case VideoExportTimingSource::Manual:
         return QStringLiteral("Manual");
+    }
+
+    return QStringLiteral("Unknown");
+}
+
+/**
+ * @brief Returns a stable display/audit label for a video export source kind.
+ * @param sourceKind Source shape selected for export.
+ * @return Human-readable source kind label.
+ */
+inline QString videoExportSourceKindName(VideoExportSourceKind sourceKind)
+{
+    switch (sourceKind)
+    {
+    case VideoExportSourceKind::MultiFrameSop:
+        return QStringLiteral("Multi-frame SOP");
+    case VideoExportSourceKind::SliceSeries:
+        return QStringLiteral("Slice series");
     }
 
     return QStringLiteral("Unknown");

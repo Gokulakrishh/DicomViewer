@@ -319,6 +319,7 @@ set(SRC_FILES
     src/Services/MeasurementAnnotationStore.cpp
     src/Services/SeriesPreviewService.cpp
     src/Services/VideoExport/DicomCineFrameProvider.cpp
+    src/Services/VideoExport/DicomSeriesFrameProvider.cpp
     src/Services/VideoExport/GStreamerVideoExportService.cpp
     src/DicomViewerWindow/DicomViewportController.cpp
     src/DicomViewerWindow/ViewportSession.cpp
@@ -412,6 +413,7 @@ set(HEADER_FILES
     src/Services/ISeriesPreviewService.h
     src/Services/SeriesPreviewService.h
     src/Services/VideoExport/DicomCineFrameProvider.h
+    src/Services/VideoExport/DicomSeriesFrameProvider.h
     src/Services/VideoExport/GStreamerVideoExportService.h
     src/Services/VideoExport/IVideoExportService.h
     src/Services/VideoExport/IVideoFrameProvider.h

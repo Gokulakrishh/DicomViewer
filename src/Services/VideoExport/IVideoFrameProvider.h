@@ -15,7 +15,8 @@
  * - Respect cancellation without modifying viewer or source DICOM state.
  *
  * Assumptions:
- * - A provider instance represents one multi-frame DICOM SOP.
+ * - A provider instance represents one ordered export source such as a
+ *   multi-frame SOP or a slice series.
  * - Visited images are temporary and must not be retained by the consumer.
  */
 class IVideoFrameProvider
@@ -26,7 +27,7 @@ public:
 
     virtual ~IVideoFrameProvider() = default;
 
-    /** @brief Returns the number of frames in the represented source SOP. */
+    /** @brief Returns the number of frames in the represented source. */
     virtual int frameCount() const = 0;
 
     /** @brief Returns the expected output frame dimensions. */

@@ -20,7 +20,7 @@ VideoExportDialog::VideoExportDialog(Context context, QWidget* parent)
     : AppDialogBase(parent),
       m_context(std::move(context))
 {
-    setDialogTitleText(QStringLiteral("Export XA Cine"));
+    setDialogTitleText(QStringLiteral("Export Cine"));
     setDialogMessageText(
         QStringLiteral("Export a selected frame range as derived, non-diagnostic MP4/H.264 video."));
     setMinimumWidth(520);
@@ -59,7 +59,7 @@ VideoExportDialog::VideoExportDialog(Context context, QWidget* parent)
         ? QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
         : moviesPath;
     const QString baseName = m_context.suggestedBaseName.trimmed().isEmpty()
-        ? QStringLiteral("xa-cine")
+        ? QStringLiteral("cine-export")
         : m_context.suggestedBaseName.trimmed();
     m_outputPathEdit->setText(
         QFileInfo(outputDirectory, baseName + QStringLiteral("-derived.mp4")).absoluteFilePath());
@@ -107,12 +107,14 @@ VideoExportRequest VideoExportDialog::request() const
     {
         const QFileInfo outputInfo(request.outputPath);
         const QString baseName = outputInfo.completeBaseName().isEmpty()
-            ? QStringLiteral("xa-cine-derived")
+            ? QStringLiteral("cine-derived")
             : outputInfo.completeBaseName();
         request.outputPath = outputInfo.dir().filePath(baseName + QStringLiteral(".mp4"));
     }
     request.sourceSopInstanceUid = m_context.sourceSopInstanceUid;
+    request.sourceSeriesInstanceUid = m_context.sourceSeriesInstanceUid;
     request.productVersion = m_context.productVersion;
+    request.sourceKind = m_context.sourceKind;
     request.firstFrameIndex = m_firstFrameSpinBox->value() - 1;
     request.lastFrameIndex = m_lastFrameSpinBox->value() - 1;
     request.framesPerSecond = m_framesPerSecondSpinBox->value();
@@ -126,7 +128,7 @@ void VideoExportDialog::chooseOutputPath()
 {
     const QString selectedPath = QFileDialog::getSaveFileName(
         this,
-        QStringLiteral("Export XA Cine"),
+        QStringLiteral("Export Cine"),
         m_outputPathEdit->text(),
         QStringLiteral("MP4 H.264 Video (*.mp4)"));
     if (!selectedPath.isEmpty())
@@ -155,7 +157,7 @@ void VideoExportDialog::accept()
     const VideoExportRequest exportRequest = request();
     if (exportRequest.outputPath.trimmed().isEmpty())
     {
-        QMessageBox::warning(this, QStringLiteral("Export XA Cine"), QStringLiteral("Choose an output file."));
+        QMessageBox::warning(this, QStringLiteral("Export Cine"), QStringLiteral("Choose an output file."));
         return;
     }
     if (QFileInfo::exists(exportRequest.outputPath))
