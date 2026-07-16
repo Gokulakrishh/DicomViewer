@@ -35,6 +35,9 @@ VtkSliceMprPaneView::VtkSliceMprPaneView(const QString& title, MprSlicePlane pla
     m_windowLevelLabel = new QLabel("WL/WW: - / -", m_renderWidget);
     m_windowLevelLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
     m_windowLevelLabel->setStyleSheet(overlayStyle);
+    m_slabLabel = new QLabel("Mode: Thin Slice", m_renderWidget);
+    m_slabLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_slabLabel->setStyleSheet(overlayStyle);
     m_zoomLabel = new QLabel("Zoom: -", m_renderWidget);
     m_zoomLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
     m_zoomLabel->setStyleSheet(overlayStyle);
@@ -98,6 +101,12 @@ void VtkSliceMprPaneView::setWindowLevelText(const QString& text)
     layoutStatusLabels();
 }
 
+void VtkSliceMprPaneView::setSlabText(const QString& text)
+{
+    m_slabLabel->setText(text);
+    layoutStatusLabels();
+}
+
 void VtkSliceMprPaneView::setZoomText(const QString& text)
 {
     m_zoomLabel->setText(text);
@@ -139,19 +148,23 @@ void VtkSliceMprPaneView::layoutStatusLabels()
     m_contextLabel->adjustSize();
     m_sliceInfoLabel->adjustSize();
     m_windowLevelLabel->adjustSize();
+    m_slabLabel->adjustSize();
     m_zoomLabel->adjustSize();
 
     m_contextLabel->move(margin, margin);
     const int zoomY = std::max(margin, m_renderWidget->height() - m_zoomLabel->height() - margin);
-    const int wlY = std::max(margin, zoomY - m_windowLevelLabel->height() - 4);
+    const int slabY = std::max(margin, zoomY - m_slabLabel->height() - 4);
+    const int wlY = std::max(margin, slabY - m_windowLevelLabel->height() - 4);
     const int sliceY = std::max(margin, wlY - m_sliceInfoLabel->height() - 4);
     m_sliceInfoLabel->move(margin, sliceY);
     m_windowLevelLabel->move(margin, wlY);
+    m_slabLabel->move(margin, slabY);
     m_zoomLabel->move(margin, zoomY);
 
     m_contextLabel->raise();
     m_sliceInfoLabel->raise();
     m_windowLevelLabel->raise();
+    m_slabLabel->raise();
     m_zoomLabel->raise();
     setCrosshairPosition(m_crosshairNormalizedPosition);
     m_measurementOverlay->setGeometry(m_renderWidget->rect());

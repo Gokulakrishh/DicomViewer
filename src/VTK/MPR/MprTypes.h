@@ -28,6 +28,26 @@ enum class MprToolType
 };
 
 /**
+ * @brief Orthogonal MPR slab projection modes.
+ */
+enum class MprSlabMode
+{
+    Thin,
+    MaximumIntensity,
+    MinimumIntensity,
+    Average
+};
+
+/**
+ * @brief Shared slab projection settings for orthogonal MPR panes.
+ */
+struct MprSlabSettings
+{
+    MprSlabMode mode{MprSlabMode::Thin};
+    double thicknessMm{1.0};
+};
+
+/**
  * @brief Crosshair/cursor position in volume world coordinates.
  */
 struct MprCursorPositionWorld

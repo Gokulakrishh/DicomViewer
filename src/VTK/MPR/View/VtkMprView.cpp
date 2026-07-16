@@ -107,6 +107,23 @@ QString slicePositionText(MprSlicePlane plane, int slice, const MprCursorPositio
         .arg(axisLabelForPlane(plane))
         .arg(axisPositionForPlane(plane, position), 0, 'f', 1);
 }
+
+QString slabModeLabel(MprSlabMode mode)
+{
+    switch (mode)
+    {
+    case MprSlabMode::Thin:
+        return QStringLiteral("Thin Slice");
+    case MprSlabMode::MaximumIntensity:
+        return QStringLiteral("MIP");
+    case MprSlabMode::MinimumIntensity:
+        return QStringLiteral("MinIP");
+    case MprSlabMode::Average:
+        return QStringLiteral("Average");
+    }
+
+    return QStringLiteral("Thin Slice");
+}
 }
 
 VtkMprView::VtkMprView(
@@ -156,6 +173,33 @@ void VtkMprView::setActiveTool(MprToolType toolType)
 void VtkMprView::setWindowLevelWidth(int level, int width)
 {
     m_controller.setWindowLevelWidth(level, width);
+}
+
+void VtkMprView::setSlabSettings(const MprSlabSettings& settings)
+{
+    MprSlabSettings normalizedSettings = settings;
+    normalizedSettings.thicknessMm = std::clamp(normalizedSettings.thicknessMm, 1.0, 50.0);
+    const bool changed = normalizedSettings.mode != m_slabSettings.mode ||
+        std::abs(normalizedSettings.thicknessMm - m_slabSettings.thicknessMm) > 0.001;
+    if (!changed)
+    {
+        return;
+    }
+
+    if (normalizedSettings.mode != MprSlabMode::Thin)
+    {
+        m_measurementService.cancelActiveMeasurement();
+    }
+
+    m_slabSettings = normalizedSettings;
+    m_sceneAdapter->applySlabSettings(m_slabSettings);
+    refreshOverlayState();
+    m_sceneAdapter->renderAll();
+}
+
+MprSlabSettings VtkMprView::slabSettings() const
+{
+    return m_slabSettings;
 }
 
 void VtkMprView::setContextText(const QString& text)
@@ -411,9 +455,25 @@ void VtkMprView::updatePaneStatusText()
         QString("WL: %1 WW: %2")
             .arg(wl)
             .arg(ww));
+    const QString slabText = slabStatusText();
+    m_axialPane->setSlabText(slabText);
+    m_coronalPane->setSlabText(slabText);
+    m_sagittalPane->setSlabText(slabText);
     m_axialPane->setZoomText(QString("Zoom: %1%").arg(m_sceneAdapter->zoomPercent(MprSlicePlane::Axial)));
     m_coronalPane->setZoomText(QString("Zoom: %1%").arg(m_sceneAdapter->zoomPercent(MprSlicePlane::Coronal)));
     m_sagittalPane->setZoomText(QString("Zoom: %1%").arg(m_sceneAdapter->zoomPercent(MprSlicePlane::Sagittal)));
+}
+
+QString VtkMprView::slabStatusText() const
+{
+    if (m_slabSettings.mode == MprSlabMode::Thin)
+    {
+        return QStringLiteral("Mode: Thin Slice");
+    }
+
+    return QString("Mode: %1 | Slab: %2 mm")
+        .arg(slabModeLabel(m_slabSettings.mode))
+        .arg(m_slabSettings.thicknessMm, 0, 'f', 1);
 }
 
 QString VtkMprView::displayContextText() const
@@ -478,6 +538,12 @@ bool VtkMprView::handleMeasurementEvent(QObject* watched, QEvent* event, MprSlic
     if (!widget)
     {
         return false;
+    }
+
+    if (m_slabSettings.mode != MprSlabMode::Thin)
+    {
+        event->accept();
+        return true;
     }
 
     ViewerInputEvent inputEvent;

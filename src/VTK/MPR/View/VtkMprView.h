@@ -51,6 +51,10 @@ public:
     void setContextText(const QString& text);
     /** @brief Sets WL/WW values. */
     void setWindowLevelWidth(int level, int width);
+    /** @brief Sets shared orthogonal slab projection settings. */
+    void setSlabSettings(const MprSlabSettings& settings);
+    /** @brief Returns current slab projection settings. */
+    [[nodiscard]] MprSlabSettings slabSettings() const;
     /** @brief Returns current window level. */
     [[nodiscard]] int currentWindowLevel() const;
     /** @brief Returns current window width. */
@@ -83,6 +87,7 @@ private:
     void refreshMeasurementOverlays();
     void updateCursorState();
     void updatePaneStatusText();
+    [[nodiscard]] QString slabStatusText() const;
     [[nodiscard]] QString displayContextText() const;
     [[nodiscard]] MprSlicePlane planeForRenderWidget(QObject* watched) const;
     [[nodiscard]] QPointF normalizedPositionForEvent(QObject* watched, const QPointF& position) const;
@@ -137,6 +142,7 @@ private:
     QPointF m_lastInteractionPosition{0.5, 0.5};
     bool m_panDragActive{false};
     QString m_contextText;
+    MprSlabSettings m_slabSettings;
     QString m_seriesInstanceUid;
     MprMeasurementAnnotationStore* m_annotationStore{nullptr};
     QHash<QString, MprSlicePlane> m_measurementPlaneById;

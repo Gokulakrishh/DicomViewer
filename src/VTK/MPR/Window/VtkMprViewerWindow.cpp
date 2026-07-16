@@ -9,7 +9,9 @@
 #include <QAction>
 #include <QComboBox>
 #include <QDockWidget>
+#include <QDoubleSpinBox>
 #include <QEvent>
+#include <QLabel>
 #include <QSignalBlocker>
 #include <QToolBar>
 #include <cmath>
@@ -19,6 +21,22 @@ namespace
 {
 constexpr int kDicomWindowPresetBase = 1000;
 constexpr int kBuiltInWindowPresetBase = 2000;
+
+MprSlabMode slabModeFromComboValue(int value)
+{
+    switch (value)
+    {
+    case 1:
+        return MprSlabMode::MaximumIntensity;
+    case 2:
+        return MprSlabMode::MinimumIntensity;
+    case 3:
+        return MprSlabMode::Average;
+    case 0:
+    default:
+        return MprSlabMode::Thin;
+    }
+}
 }
 
 VtkMprViewerWindow::VtkMprViewerWindow(
@@ -101,14 +119,38 @@ void VtkMprViewerWindow::setupToolbar()
     }
     toolbar->addWidget(m_presetComboBox);
     toolbar->addSeparator();
+
+    toolbar->addWidget(new QLabel("MPR", toolbar));
+    m_slabModeComboBox = new QComboBox(toolbar);
+    m_slabModeComboBox->setToolTip("Orthogonal slab projection mode");
+    m_slabModeComboBox->addItem("Thin Slice", 0);
+    m_slabModeComboBox->addItem("MIP", 1);
+    m_slabModeComboBox->addItem("MinIP", 2);
+    m_slabModeComboBox->addItem("Average", 3);
+    toolbar->addWidget(m_slabModeComboBox);
+
+    m_slabThicknessSpinBox = new QDoubleSpinBox(toolbar);
+    m_slabThicknessSpinBox->setToolTip("Shared orthogonal slab thickness in millimeters");
+    m_slabThicknessSpinBox->setRange(1.0, 50.0);
+    m_slabThicknessSpinBox->setDecimals(1);
+    m_slabThicknessSpinBox->setSingleStep(1.0);
+    m_slabThicknessSpinBox->setSuffix(" mm");
+    m_slabThicknessSpinBox->setValue(10.0);
+    m_slabThicknessSpinBox->setEnabled(false);
+    toolbar->addWidget(m_slabThicknessSpinBox);
+    toolbar->addSeparator();
+
     m_toolPresentation = std::make_unique<ViewerToolPresentation>(*toolbar, this);
     m_toolPresentation->setSelectionChangedCallback([this](std::optional<ViewerToolId>) {
         applyToolSelection();
     });
 
     connect(m_presetComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &VtkMprViewerWindow::applyWindowPreset);
+    connect(m_slabModeComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &VtkMprViewerWindow::applySlabControls);
+    connect(m_slabThicknessSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &VtkMprViewerWindow::applySlabControls);
 
     applyToolSelection();
+    applySlabControls();
 }
 
 void VtkMprViewerWindow::setupAnnotationDock()
@@ -210,6 +252,18 @@ void VtkMprViewerWindow::applyWindowPreset(int index)
             m_view->setWindowLevelWidth(preset.level, preset.width);
         }
     }
+}
+
+void VtkMprViewerWindow::applySlabControls()
+{
+    if (!m_view || !m_slabModeComboBox || !m_slabThicknessSpinBox)
+    {
+        return;
+    }
+
+    const MprSlabMode mode = slabModeFromComboValue(m_slabModeComboBox->currentData().toInt());
+    m_slabThicknessSpinBox->setEnabled(mode != MprSlabMode::Thin);
+    m_view->setSlabSettings({mode, m_slabThicknessSpinBox->value()});
 }
 
 void VtkMprViewerWindow::syncPresetSelection(int level, int width)

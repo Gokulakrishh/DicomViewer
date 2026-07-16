@@ -6,9 +6,13 @@
 #include <cmath>
 #include <vtkActor.h>
 #include <vtkAxesActor.h>
+#include <vtkCallbackCommand.h>
 #include <vtkCamera.h>
+#include <vtkCommand.h>
 #include <vtkGenericOpenGLRenderWindow.h>
 #include <vtkImageData.h>
+#include <vtkImageReslice.h>
+#include <vtkImageSlabReslice.h>
 #include <vtkInteractorStyleTrackballCamera.h>
 #include <vtkInteractorStyleUser.h>
 #include <vtkLineSource.h>
@@ -19,6 +23,9 @@
 #include <vtkProperty.h>
 #include <vtkRenderer.h>
 #include <vtkRenderWindowInteractor.h>
+#include <vtkResliceCursor.h>
+#include <vtkResliceCursorRepresentation.h>
+#include <vtkResliceCursorWidget.h>
 #include <vtkResliceImageViewer.h>
 #include <vtkSphereSource.h>
 
@@ -72,6 +79,112 @@ public:
 };
 
 vtkStandardNewMacro(ReferenceNavigatorInteractorStyle);
+
+class SlicePaneInteractorStyle final : public vtkInteractorStyleUser
+{
+public:
+    static SlicePaneInteractorStyle* New();
+    vtkTypeMacro(SlicePaneInteractorStyle, vtkInteractorStyleUser);
+
+    void OnLeftButtonDown() override {}
+    void OnLeftButtonUp() override {}
+    void OnMiddleButtonDown() override {}
+    void OnMiddleButtonUp() override {}
+    void OnRightButtonDown() override {}
+    void OnRightButtonUp() override {}
+    void OnMouseMove() override {}
+    void OnMouseWheelForward() override {}
+    void OnMouseWheelBackward() override {}
+    void OnChar() override {}
+    void OnKeyPress() override {}
+    void OnKeyRelease() override {}
+};
+
+vtkStandardNewMacro(SlicePaneInteractorStyle);
+
+void swallowVtkSliceInput(vtkObject*, unsigned long, void*, void*)
+{
+}
+
+int vtkSlabModeForMprMode(MprSlabMode mode)
+{
+    switch (mode)
+    {
+    case MprSlabMode::MaximumIntensity:
+        return VTK_IMAGE_SLAB_MAX;
+    case MprSlabMode::MinimumIntensity:
+        return VTK_IMAGE_SLAB_MIN;
+    case MprSlabMode::Average:
+    case MprSlabMode::Thin:
+        return VTK_IMAGE_SLAB_MEAN;
+    }
+
+    return VTK_IMAGE_SLAB_MEAN;
+}
+
+void resetSliceCameraToFit(vtkResliceImageViewer& viewer)
+{
+    auto* renderer = viewer.GetRenderer();
+    if (!renderer)
+    {
+        return;
+    }
+
+    renderer->ResetCamera();
+    renderer->ResetCameraClippingRange();
+}
+
+void disableResliceWidgetInteraction(vtkResliceImageViewer& viewer)
+{
+    auto* widget = viewer.GetResliceCursorWidget();
+    if (!widget)
+    {
+        return;
+    }
+
+    widget->ProcessEventsOff();
+    widget->ManagesCursorOff();
+}
+
+void installSliceInputSwallower(
+    vtkResliceImageViewer& viewer,
+    vtkInteractorStyleUser& interactorStyle,
+    vtkSmartPointer<vtkCallbackCommand>& callback)
+{
+    disableResliceWidgetInteraction(viewer);
+
+    auto* renderWindow = viewer.GetRenderWindow();
+    auto* interactor = renderWindow ? renderWindow->GetInteractor() : nullptr;
+    if (!interactor)
+    {
+        return;
+    }
+
+    if (interactor->GetInteractorStyle() != &interactorStyle)
+    {
+        interactor->SetInteractorStyle(&interactorStyle);
+    }
+
+    if (callback)
+    {
+        return;
+    }
+
+    callback = vtkSmartPointer<vtkCallbackCommand>::New();
+    callback->SetCallback(swallowVtkSliceInput);
+    callback->AbortFlagOnExecuteOn();
+
+    constexpr double priority = 1.0;
+    interactor->AddObserver(vtkCommand::LeftButtonPressEvent, callback, priority);
+    interactor->AddObserver(vtkCommand::LeftButtonReleaseEvent, callback, priority);
+    interactor->AddObserver(vtkCommand::MiddleButtonPressEvent, callback, priority);
+    interactor->AddObserver(vtkCommand::MiddleButtonReleaseEvent, callback, priority);
+    interactor->AddObserver(vtkCommand::RightButtonPressEvent, callback, priority);
+    interactor->AddObserver(vtkCommand::RightButtonReleaseEvent, callback, priority);
+    interactor->AddObserver(vtkCommand::MouseMoveEvent, callback, priority);
+    interactor->AddObserver(vtkCommand::MouseWheelForwardEvent, callback, priority);
+    interactor->AddObserver(vtkCommand::MouseWheelBackwardEvent, callback, priority);
+}
 }
 
 VtkMprSceneAdapter::VtkMprSceneAdapter()
@@ -91,8 +204,11 @@ void VtkMprSceneAdapter::attachPane(MprSlicePlane plane, QVTKOpenGLNativeWidget&
     const int index = planeIndex(plane);
     widget.setRenderWindow(m_sliceViewers[index]->GetRenderWindow());
     m_sliceViewers[index]->SetupInteractor(widget.renderWindow()->GetInteractor());
-    m_neutralInteractorStyles[index] = vtkSmartPointer<vtkInteractorStyleUser>::New();
-    widget.renderWindow()->GetInteractor()->SetInteractorStyle(m_neutralInteractorStyles[index]);
+    m_neutralInteractorStyles[index] = vtkSmartPointer<SlicePaneInteractorStyle>::New();
+    installSliceInputSwallower(
+        *m_sliceViewers[index],
+        *m_neutralInteractorStyles[index],
+        m_sliceInputSwallowCallbacks[index]);
 }
 
 void VtkMprSceneAdapter::attachReferencePane(QVTKOpenGLNativeWidget& widget)
@@ -119,6 +235,14 @@ void VtkMprSceneAdapter::initialize(vtkImageData& imageData, int windowLevel, in
         m_sliceViewers[index]->SetColorLevel(windowLevel);
         m_sliceViewers[index]->SetColorWindow(windowWidth);
         m_sliceViewers[index]->SetSliceScrollOnMouseWheel(false);
+        m_sliceViewers[index]->SetThickMode(0);
+        if (m_neutralInteractorStyles[index])
+        {
+            installSliceInputSwallower(
+                *m_sliceViewers[index],
+                *m_neutralInteractorStyles[index],
+                m_sliceInputSwallowCallbacks[index]);
+        }
         m_sliceViewers[index]->GetRenderer()->ResetCamera();
         if (auto* camera = m_sliceViewers[index]->GetRenderer()->GetActiveCamera())
         {
@@ -126,6 +250,7 @@ void VtkMprSceneAdapter::initialize(vtkImageData& imageData, int windowLevel, in
         }
     }
 
+    applySlabSettings(m_slabSettings);
     initializeReferenceScene();
 }
 
@@ -151,6 +276,10 @@ void VtkMprSceneAdapter::applyCursorPositionWorld(const MprCursorPositionWorld& 
             viewer->GetSliceMin(),
             viewer->GetSliceMax());
         viewer->SetSlice(clampedSlice);
+        if (auto* cursor = viewer->GetResliceCursor())
+        {
+            cursor->SetCenter(cursorPosition.x, cursorPosition.y, cursorPosition.z);
+        }
     }
 
     updateReferencePlanes(cursorPosition);
@@ -162,6 +291,75 @@ void VtkMprSceneAdapter::applyWindowLevelWidth(int level, int width)
     {
         m_sliceViewers[index]->SetColorLevel(level);
         m_sliceViewers[index]->SetColorWindow(width);
+    }
+}
+
+void VtkMprSceneAdapter::applySlabSettings(const MprSlabSettings& settings)
+{
+    m_slabSettings = settings;
+    const bool thickMode = settings.mode != MprSlabMode::Thin;
+    const double thicknessMm = std::max(1.0, settings.thicknessMm);
+    const int slabMode = vtkSlabModeForMprMode(settings.mode);
+
+    for (int index = 0; index < 3; ++index)
+    {
+        auto* viewer = m_sliceViewers[index].GetPointer();
+        if (!viewer)
+        {
+            continue;
+        }
+
+        viewer->SetResliceMode(thickMode
+            ? vtkResliceImageViewer::RESLICE_OBLIQUE
+            : vtkResliceImageViewer::RESLICE_AXIS_ALIGNED);
+        viewer->SetThickMode(thickMode ? 1 : 0);
+        if (m_neutralInteractorStyles[index])
+        {
+            installSliceInputSwallower(
+                *viewer,
+                *m_neutralInteractorStyles[index],
+                m_sliceInputSwallowCallbacks[index]);
+        }
+        else
+        {
+            disableResliceWidgetInteraction(*viewer);
+        }
+        if (auto* cursor = viewer->GetResliceCursor())
+        {
+            cursor->SetThickMode(thickMode ? 1 : 0);
+            cursor->SetThickness(thicknessMm, thicknessMm, thicknessMm);
+            cursor->SetCenter(
+                m_referenceCursorPosition.x,
+                m_referenceCursorPosition.y,
+                m_referenceCursorPosition.z);
+        }
+
+        if (auto* widget = viewer->GetResliceCursorWidget())
+        {
+            if (auto* representation = widget->GetResliceCursorRepresentation())
+            {
+                if (auto* slabReslice = vtkImageSlabReslice::SafeDownCast(representation->GetReslice()))
+                {
+                    slabReslice->SetBlendMode(slabMode);
+                    slabReslice->SetSlabThickness(thicknessMm);
+                    slabReslice->SetSlabResolution(std::max(0.1, thicknessMm / 10.0));
+                }
+                else if (auto* imageReslice = vtkImageReslice::SafeDownCast(representation->GetReslice()))
+                {
+                    imageReslice->SetSlabMode(slabMode);
+                    imageReslice->SetSlabNumberOfSlices(thickMode ? std::max(2, static_cast<int>(std::lround(thicknessMm))) : 1);
+                }
+            }
+        }
+        resetSliceCameraToFit(*viewer);
+        viewer->Render();
+        if (m_neutralInteractorStyles[index])
+        {
+            installSliceInputSwallower(
+                *viewer,
+                *m_neutralInteractorStyles[index],
+                m_sliceInputSwallowCallbacks[index]);
+        }
     }
 }
 

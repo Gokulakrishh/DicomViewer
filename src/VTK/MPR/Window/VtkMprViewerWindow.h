@@ -13,6 +13,7 @@ class QAction;
 class QComboBox;
 class QMenu;
 class QDockWidget;
+class QDoubleSpinBox;
 class DatabaseService;
 class IVolumeData;
 class MprMeasurementAnnotationStore;
@@ -48,6 +49,7 @@ protected:
 
 private:
     void applyWindowPreset(int index);
+    void applySlabControls();
     void applyToolSelection();
     void syncPresetSelection(int level, int width);
     void setupToolbar();
@@ -60,6 +62,8 @@ private:
     QDockWidget* m_annotationDockWidget{nullptr};
     VtkMprAnnotationDock* m_annotationDock{nullptr};
     QComboBox* m_presetComboBox{nullptr};
+    QComboBox* m_slabModeComboBox{nullptr};
+    QDoubleSpinBox* m_slabThicknessSpinBox{nullptr};
     std::unique_ptr<ViewerToolPresentation> m_toolPresentation;
     std::unique_ptr<MprMeasurementAnnotationStore> m_annotationStore;
     std::vector<DicomWindowPreset> m_dicomWindowPresets;

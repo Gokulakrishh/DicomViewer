@@ -20,6 +20,7 @@ class vtkRenderer;
 class vtkResliceImageViewer;
 class vtkGenericOpenGLRenderWindow;
 class vtkSphereSource;
+class vtkCallbackCommand;
 
 /**
  * @brief VTK scene adapter for MPR slice and reference panes.
@@ -46,6 +47,8 @@ public:
     void applyCursorPositionWorld(const MprCursorPositionWorld& cursorPosition);
     /** @brief Applies WL/WW to all MPR panes. */
     void applyWindowLevelWidth(int level, int width);
+    /** @brief Applies shared orthogonal slab projection settings to all MPR panes. */
+    void applySlabSettings(const MprSlabSettings& settings);
     /** @brief Applies zoom to a plane. */
     void zoom(MprSlicePlane plane, const QPointF& normalizedDelta);
     /** @brief Applies pan to a plane. */
@@ -89,7 +92,9 @@ private:
 
 private:
     vtkImageData* m_imageData{nullptr};
+    MprSlabSettings m_slabSettings;
     vtkSmartPointer<vtkInteractorStyleUser> m_neutralInteractorStyles[3];
+    std::array<vtkSmartPointer<vtkCallbackCommand>, 3> m_sliceInputSwallowCallbacks;
     vtkSmartPointer<vtkResliceImageViewer> m_sliceViewers[3];
     double m_initialParallelScales[3]{1.0, 1.0, 1.0};
     vtkSmartPointer<vtkGenericOpenGLRenderWindow> m_referenceRenderWindow;

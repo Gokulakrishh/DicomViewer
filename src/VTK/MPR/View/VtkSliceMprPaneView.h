@@ -39,6 +39,8 @@ public:
     void setSliceText(const QString& text);
     /** @brief Sets WL/WW label text. */
     void setWindowLevelText(const QString& text);
+    /** @brief Sets slab projection label text. */
+    void setSlabText(const QString& text);
     /** @brief Sets zoom label text. */
     void setZoomText(const QString& text);
     /** @brief Shows or hides crosshair overlay. */
@@ -59,6 +61,7 @@ private:
     QLabel* m_contextLabel{nullptr};
     QLabel* m_sliceInfoLabel{nullptr};
     QLabel* m_windowLevelLabel{nullptr};
+    QLabel* m_slabLabel{nullptr};
     QLabel* m_zoomLabel{nullptr};
     CrosshairOverlayWidget* m_crosshairOverlay{nullptr};
     MeasurementOverlayWidget* m_measurementOverlay{nullptr};
