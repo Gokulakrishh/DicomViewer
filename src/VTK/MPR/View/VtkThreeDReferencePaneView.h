@@ -25,5 +25,6 @@ public:
 private:
     QWidget* m_rootWidget{nullptr};
     QLabel* m_titleLabel{nullptr};
+    QLabel* m_statusLabel{nullptr};
     QVTKOpenGLNativeWidget* m_renderWidget{nullptr};
 };

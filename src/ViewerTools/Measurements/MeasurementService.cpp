@@ -105,6 +105,23 @@ void MeasurementService::setMeasurements(const QVector<MeasurementAnnotation>& m
     m_previewPoint.reset();
 }
 
+bool MeasurementService::removeMeasurement(const QString& measurementId)
+{
+    const auto it = std::find_if(
+        m_measurements.begin(),
+        m_measurements.end(),
+        [&measurementId](const MeasurementAnnotation& measurement) {
+            return measurement.id == measurementId;
+        });
+    if (it == m_measurements.end())
+    {
+        return false;
+    }
+
+    m_measurements.erase(it);
+    return true;
+}
+
 void MeasurementService::cancelActiveMeasurement()
 {
     m_activeMeasurement.reset();

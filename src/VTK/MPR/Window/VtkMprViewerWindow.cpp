@@ -1,11 +1,14 @@
 #include "VTK/MPR/Window/VtkMprViewerWindow.h"
 
 #include "ViewerTools/WindowLevelPreset.h"
+#include "Services/MprMeasurementAnnotationStore.h"
 #include "VTK/MPR/MprTypes.h"
+#include "VTK/MPR/Window/VtkMprAnnotationDock.h"
 #include "VTK/MPR/View/VtkMprView.h"
 
 #include <QAction>
 #include <QComboBox>
+#include <QDockWidget>
 #include <QEvent>
 #include <QSignalBlocker>
 #include <QToolBar>
@@ -24,14 +27,28 @@ VtkMprViewerWindow::VtkMprViewerWindow(
     int initialWindowWidth,
     std::vector<DicomWindowPreset> dicomWindowPresets,
     int activeDicomWindowPresetIndex,
+    QString seriesInstanceUid,
+    DatabaseService* databaseService,
     QWidget* parent)
     : QMainWindow(parent),
       m_dicomWindowPresets(std::move(dicomWindowPresets)),
       m_activeDicomWindowPresetIndex(activeDicomWindowPresetIndex)
 {
-    m_view = new VtkMprView(std::move(volume), initialWindowLevel, initialWindowWidth, this);
+    if (databaseService)
+    {
+        m_annotationStore = std::make_unique<MprMeasurementAnnotationStore>(*databaseService);
+    }
+
+    m_view = new VtkMprView(
+        std::move(volume),
+        initialWindowLevel,
+        initialWindowWidth,
+        std::move(seriesInstanceUid),
+        m_annotationStore.get(),
+        this);
     setCentralWidget(m_view);
     setupToolbar();
+    setupAnnotationDock();
     syncPresetSelection(initialWindowLevel, initialWindowWidth);
     connect(m_view, &VtkMprView::windowLevelWidthChanged, this, &VtkMprViewerWindow::syncPresetSelection);
     resize(1280, 900);
@@ -92,6 +109,31 @@ void VtkMprViewerWindow::setupToolbar()
     connect(m_presetComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &VtkMprViewerWindow::applyWindowPreset);
 
     applyToolSelection();
+}
+
+void VtkMprViewerWindow::setupAnnotationDock()
+{
+    if (!m_view || !m_annotationStore)
+    {
+        return;
+    }
+
+    m_annotationDockWidget = new QDockWidget("MPR Annotations", this);
+    m_annotationDockWidget->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+    m_annotationDockWidget->setFeatures(
+        QDockWidget::DockWidgetMovable |
+        QDockWidget::DockWidgetFloatable |
+        QDockWidget::DockWidgetClosable);
+
+    m_annotationDock = new VtkMprAnnotationDock(m_annotationDockWidget);
+    m_annotationDockWidget->setWidget(m_annotationDock);
+    addDockWidget(Qt::RightDockWidgetArea, m_annotationDockWidget);
+
+    connect(m_view, &VtkMprView::mprAnnotationsChanged, m_annotationDock, &VtkMprAnnotationDock::setRecords);
+    connect(m_annotationDock, &VtkMprAnnotationDock::goToAnnotationRequested, m_view, &VtkMprView::goToMprAnnotation);
+    connect(m_annotationDock, &VtkMprAnnotationDock::deleteAnnotationRequested, m_view, &VtkMprView::deleteMprAnnotation);
+    connect(m_annotationDock, &VtkMprAnnotationDock::metadataChanged, m_view, &VtkMprView::updateMprAnnotationMetadata);
+    m_annotationDock->setRecords(m_view->mprAnnotationRecords());
 }
 
 void VtkMprViewerWindow::applyToolSelection()

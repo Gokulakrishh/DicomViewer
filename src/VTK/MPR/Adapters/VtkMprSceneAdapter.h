@@ -9,12 +9,17 @@
 
 class QVTKOpenGLNativeWidget;
 class vtkImageData;
+class vtkInteractorStyleTrackballCamera;
 class vtkInteractorStyleUser;
 class vtkActor;
-class vtkPlaneSource;
+class vtkAxesActor;
+class vtkLineSource;
+class vtkOrientationMarkerWidget;
+class vtkPolyDataMapper;
 class vtkRenderer;
 class vtkResliceImageViewer;
 class vtkGenericOpenGLRenderWindow;
+class vtkSphereSource;
 
 /**
  * @brief VTK scene adapter for MPR slice and reference panes.
@@ -67,13 +72,20 @@ public:
     [[nodiscard]] int currentSlice(MprSlicePlane plane) const;
     [[nodiscard]] int zoomPercent(MprSlicePlane plane) const;
     [[nodiscard]] int referenceZoomPercent() const;
+    /** @brief Restores the fourth-pane 3D reference camera to its default oblique view. */
+    void resetReferenceCamera();
     void renderAll() const;
     vtkImageData* imageData() const;
 
 private:
     static int planeIndex(MprSlicePlane plane);
     void initializeReferenceScene();
+    void applyDefaultReferenceCamera();
+    void addReferenceSliceLineActors();
+    void addReferenceCursorActor();
+    void configureOrientationMarker();
     void updateReferencePlanes(const MprCursorPositionWorld& cursorPosition);
+    void centerReferenceCameraOnCursor(const MprCursorPositionWorld& cursorPosition);
 
 private:
     vtkImageData* m_imageData{nullptr};
@@ -82,9 +94,14 @@ private:
     double m_initialParallelScales[3]{1.0, 1.0, 1.0};
     vtkSmartPointer<vtkGenericOpenGLRenderWindow> m_referenceRenderWindow;
     vtkSmartPointer<vtkRenderer> m_referenceRenderer;
-    vtkSmartPointer<vtkInteractorStyleUser> m_referenceInteractorStyle;
+    vtkSmartPointer<vtkInteractorStyleTrackballCamera> m_referenceInteractorStyle;
     double m_referenceInitialParallelScale{1.0};
     vtkSmartPointer<vtkActor> m_referenceOutlineActor;
-    vtkSmartPointer<vtkPlaneSource> m_referencePlaneSources[3];
-    vtkSmartPointer<vtkActor> m_referencePlaneActors[3];
+    vtkSmartPointer<vtkLineSource> m_referenceSliceLineSources[3][4];
+    vtkSmartPointer<vtkActor> m_referenceSliceLineActors[3][4];
+    vtkSmartPointer<vtkSphereSource> m_referenceCursorSphereSource;
+    vtkSmartPointer<vtkActor> m_referenceCursorActor;
+    vtkSmartPointer<vtkAxesActor> m_referenceOrientationAxes;
+    vtkSmartPointer<vtkOrientationMarkerWidget> m_referenceOrientationMarker;
+    MprCursorPositionWorld m_referenceCursorPosition;
 };

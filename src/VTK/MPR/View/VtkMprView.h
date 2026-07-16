@@ -4,9 +4,12 @@
 #include "VTK/MPR/Controllers/MprController.h"
 #include "VTK/MPR/Controllers/ToolController.h"
 #include "VTK/MPR/State/MprScene.h"
+#include "Model/MeasurementAnnotationRecord.h"
 #include "ViewerTools/Measurements/MeasurementTool.h"
 #include "ViewerTools/Measurements/MeasurementService.h"
 
+#include <QHash>
+#include <QSet>
 #include <QWidget>
 #include <vtkSmartPointer.h>
 
@@ -18,6 +21,7 @@ class VtkMprSceneAdapter;
 class VtkSliceMprPaneView;
 class VtkThreeDReferencePaneView;
 class vtkImageData;
+class MprMeasurementAnnotationStore;
 
 /**
  * @brief QWidget MPR view containing three orthogonal slice panes and reference pane.
@@ -36,6 +40,8 @@ public:
         std::shared_ptr<IVolumeData> volume,
         int initialWindowLevel,
         int initialWindowWidth,
+        QString seriesInstanceUid = {},
+        MprMeasurementAnnotationStore* annotationStore = nullptr,
         QWidget* parent = nullptr);
     ~VtkMprView() override;
 
@@ -51,9 +57,21 @@ public:
     [[nodiscard]] int currentWindowWidth() const;
     /** @brief Returns active MPR tool. */
     [[nodiscard]] MprToolType activeTool() const;
+    /** @brief Returns current active-series MPR annotation records. */
+    [[nodiscard]] QList<MprMeasurementAnnotationRecord> mprAnnotationRecords() const;
 
 signals:
     void windowLevelWidthChanged(int level, int width);
+    void mprAnnotationsChanged(const QList<MprMeasurementAnnotationRecord>& records);
+
+public slots:
+    void goToMprAnnotation(const QString& annotationId);
+    void deleteMprAnnotation(const QString& annotationId);
+    void updateMprAnnotationMetadata(
+        const QString& annotationId,
+        const QString& label,
+        const QString& bodyRegion,
+        const QString& note);
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -79,6 +97,18 @@ private:
         QWidget& widget,
         const QPointF& position) const;
     [[nodiscard]] QString measurementLabel(
+        const MeasurementAnnotation& measurement,
+        MprSlicePlane plane) const;
+    [[nodiscard]] bool measurementBelongsToCurrentSlice(
+        const MeasurementAnnotation& measurement,
+        MprSlicePlane plane) const;
+    [[nodiscard]] double sliceToleranceMm(MprSlicePlane plane) const;
+    void loadPersistedMprAnnotations();
+    void captureNewMeasurementPlaneContexts();
+    void persistNewMprMeasurements();
+    void publishMprAnnotationRecords();
+    [[nodiscard]] QList<MprMeasurementAnnotationRecord> currentMprAnnotationRecords() const;
+    [[nodiscard]] MprMeasurementAnnotationRecord toMprAnnotationRecord(
         const MeasurementAnnotation& measurement,
         MprSlicePlane plane) const;
     [[nodiscard]] QVector<DisplayMeasurement> displayMeasurementsForPane(
@@ -107,4 +137,10 @@ private:
     QPointF m_lastInteractionPosition{0.5, 0.5};
     bool m_panDragActive{false};
     QString m_contextText;
+    QString m_seriesInstanceUid;
+    MprMeasurementAnnotationStore* m_annotationStore{nullptr};
+    QHash<QString, MprSlicePlane> m_measurementPlaneById;
+    QHash<QString, MprMeasurementAnnotationRecord> m_annotationRecordById;
+    QSet<QString> m_persistedMprAnnotationIds;
+    MprSlicePlane m_lastMeasurementInputPlane{MprSlicePlane::Axial};
 };

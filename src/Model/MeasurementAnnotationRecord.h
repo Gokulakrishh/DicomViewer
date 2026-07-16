@@ -32,3 +32,34 @@ struct SliceMeasurementAnnotationRecord
     QDateTime updatedAtUtc;
     bool deleted{false};
 };
+
+/**
+ * @brief Persistable measurement/ROI annotation scoped to an MPR plane context.
+ *
+ * Responsibilities:
+ * - Store MPR-derived annotations separately from source DICOM slice/frame
+ *   annotations.
+ * - Preserve the plane identity and patient/world measurement geometry needed
+ *   to redisplay or navigate to the derived annotation.
+ *
+ * Assumptions:
+ * - MPR annotations are application-derived data in SQLite and are not written
+ *   back to source DICOM files.
+ * - `planeType` is currently axial/coronal/sagittal; future oblique support
+ *   shall add full plane origin/axis metadata before clinical claims.
+ */
+struct MprMeasurementAnnotationRecord
+{
+    QString seriesInstanceUid;
+    QString planeType;
+    double planePositionMm{0.0};
+    QString label;
+    QString bodyRegion;
+    QString note;
+    MeasurementAnnotation measurement;
+    std::optional<double> angleDegrees;
+    std::optional<RoiStatistics> roiStatistics;
+    QDateTime createdAtUtc;
+    QDateTime updatedAtUtc;
+    bool deleted{false};
+};

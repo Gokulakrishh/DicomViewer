@@ -900,6 +900,8 @@ void DicomMainWindow::openMprViewer()
         m_viewportController->currentWindowWidth(),
         std::move(dicomWindowPresets),
         activeDicomWindowPresetIndex,
+        selectedSeries->seriesInstanceUid(),
+        m_databaseService.get(),
         this);
     loadingDialog.close();
     if (viewer)

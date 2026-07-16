@@ -10,6 +10,7 @@
 
 class IVolumeData;
 class QWidget;
+class DatabaseService;
 
 /**
  * @brief Interface for opening advanced viewers from the main DICOM window.
@@ -36,6 +37,8 @@ public:
      * @param windowWidth Initial DICOM window width.
      * @param dicomWindowPresets Optional DICOM-provided WL/WW presets.
      * @param activeDicomWindowPresetIndex Active DICOM preset index, or -1.
+     * @param seriesInstanceUid Active DICOM Series Instance UID for derived MPR annotations.
+     * @param databaseService Optional persistence service for MPR annotations.
      * @param parent Optional Qt parent widget.
      * @return Created viewer widget, owned according to Qt parent/window rules.
      */
@@ -46,6 +49,8 @@ public:
         int windowWidth,
         std::vector<DicomWindowPreset> dicomWindowPresets = {},
         int activeDicomWindowPresetIndex = -1,
+        const QString& seriesInstanceUid = {},
+        DatabaseService* databaseService = nullptr,
         QWidget* parent = nullptr) = 0;
 
     /**

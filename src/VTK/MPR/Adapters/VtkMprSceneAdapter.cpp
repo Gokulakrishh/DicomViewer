@@ -2,19 +2,25 @@
 
 #include <QVTKOpenGLNativeWidget.h>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <vtkActor.h>
+#include <vtkAxesActor.h>
 #include <vtkCamera.h>
 #include <vtkGenericOpenGLRenderWindow.h>
 #include <vtkImageData.h>
+#include <vtkInteractorStyleTrackballCamera.h>
 #include <vtkInteractorStyleUser.h>
+#include <vtkLineSource.h>
+#include <vtkObjectFactory.h>
+#include <vtkOrientationMarkerWidget.h>
 #include <vtkOutlineFilter.h>
-#include <vtkPlaneSource.h>
 #include <vtkPolyDataMapper.h>
 #include <vtkProperty.h>
 #include <vtkRenderer.h>
 #include <vtkRenderWindowInteractor.h>
 #include <vtkResliceImageViewer.h>
+#include <vtkSphereSource.h>
 
 namespace
 {
@@ -50,6 +56,22 @@ QSize rendererDisplaySize(vtkRenderer& renderer, const QSize& fallbackSize)
 
     return {size[0], size[1]};
 }
+
+class ReferenceNavigatorInteractorStyle final : public vtkInteractorStyleTrackballCamera
+{
+public:
+    static ReferenceNavigatorInteractorStyle* New();
+    vtkTypeMacro(ReferenceNavigatorInteractorStyle, vtkInteractorStyleTrackballCamera);
+
+    void OnMiddleButtonDown() override {}
+    void OnMiddleButtonUp() override {}
+    void OnRightButtonDown() override {}
+    void OnRightButtonUp() override {}
+    void OnMouseWheelForward() override {}
+    void OnMouseWheelBackward() override {}
+};
+
+vtkStandardNewMacro(ReferenceNavigatorInteractorStyle);
 }
 
 VtkMprSceneAdapter::VtkMprSceneAdapter()
@@ -80,7 +102,8 @@ void VtkMprSceneAdapter::attachReferencePane(QVTKOpenGLNativeWidget& widget)
     m_referenceRenderWindow->AddRenderer(m_referenceRenderer);
     widget.setRenderWindow(m_referenceRenderWindow);
 
-    m_referenceInteractorStyle = vtkSmartPointer<vtkInteractorStyleUser>::New();
+    m_referenceInteractorStyle = vtkSmartPointer<ReferenceNavigatorInteractorStyle>::New();
+    m_referenceInteractorStyle->SetMotionFactor(3.0);
     widget.renderWindow()->GetInteractor()->SetInteractorStyle(m_referenceInteractorStyle);
 }
 
@@ -495,6 +518,15 @@ int VtkMprSceneAdapter::referenceZoomPercent() const
     return std::max(1, static_cast<int>(std::lround((initialScale / currentScale) * 100.0)));
 }
 
+void VtkMprSceneAdapter::resetReferenceCamera()
+{
+    applyDefaultReferenceCamera();
+    if (m_referenceRenderWindow)
+    {
+        m_referenceRenderWindow->Render();
+    }
+}
+
 void VtkMprSceneAdapter::renderAll() const
 {
     for (int index = 0; index < 3; ++index)
@@ -535,6 +567,13 @@ void VtkMprSceneAdapter::initializeReferenceScene()
         return;
     }
 
+    if (m_referenceOrientationMarker)
+    {
+        m_referenceOrientationMarker->SetEnabled(0);
+        m_referenceOrientationMarker = nullptr;
+        m_referenceOrientationAxes = nullptr;
+    }
+
     m_referenceRenderer->RemoveAllViewProps();
     m_referenceRenderer->SetBackground(0.05, 0.05, 0.05);
 
@@ -548,39 +587,145 @@ void VtkMprSceneAdapter::initializeReferenceScene()
     m_referenceOutlineActor->GetProperty()->SetLineWidth(1.5);
     m_referenceRenderer->AddActor(m_referenceOutlineActor);
 
+    addReferenceSliceLineActors();
+    addReferenceCursorActor();
+    configureOrientationMarker();
+
+    const auto center = centeredCursorPositionWorld();
+    updateReferencePlanes(center);
+    applyDefaultReferenceCamera();
+}
+
+void VtkMprSceneAdapter::applyDefaultReferenceCamera()
+{
+    if (!m_imageData || !m_referenceRenderer)
+    {
+        return;
+    }
+
+    auto* camera = m_referenceRenderer->GetActiveCamera();
+    if (!camera)
+    {
+        return;
+    }
+
+    double bounds[6];
+    m_imageData->GetBounds(bounds);
+    const double width = bounds[1] - bounds[0];
+    const double height = bounds[3] - bounds[2];
+    const double depth = bounds[5] - bounds[4];
+    const double diagonal = std::max(1.0, std::sqrt(width * width + height * height + depth * depth));
+
+    const double direction[3] = {0.62, -0.62, 0.48};
+    const double distance = diagonal * 1.8;
+    const auto& focus = m_referenceCursorPosition;
+
+    camera->ParallelProjectionOn();
+    camera->SetFocalPoint(focus.x, focus.y, focus.z);
+    camera->SetPosition(
+        focus.x + direction[0] * distance,
+        focus.y + direction[1] * distance,
+        focus.z + direction[2] * distance);
+    camera->SetViewUp(0.0, 0.0, 1.0);
+    camera->OrthogonalizeViewUp();
+    camera->SetParallelScale(diagonal * 0.55);
+    m_referenceRenderer->ResetCameraClippingRange();
+    m_referenceInitialParallelScale = std::max(camera->GetParallelScale(), 1e-6);
+}
+
+void VtkMprSceneAdapter::addReferenceSliceLineActors()
+{
+    if (!m_referenceRenderer)
+    {
+        return;
+    }
+
     const double colors[3][3] = {
         {0.95, 0.35, 0.35},
         {0.35, 0.85, 0.45},
         {0.35, 0.55, 0.95}};
 
-    for (int index = 0; index < 3; ++index)
+    for (int planeIndex = 0; planeIndex < 3; ++planeIndex)
     {
-        m_referencePlaneSources[index] = vtkSmartPointer<vtkPlaneSource>::New();
-        auto mapper = vtkSmartPointer<vtkPolyDataMapper>::New();
-        mapper->SetInputConnection(m_referencePlaneSources[index]->GetOutputPort());
+        for (int segmentIndex = 0; segmentIndex < 4; ++segmentIndex)
+        {
+            m_referenceSliceLineSources[planeIndex][segmentIndex] = vtkSmartPointer<vtkLineSource>::New();
 
-        m_referencePlaneActors[index] = vtkSmartPointer<vtkActor>::New();
-        m_referencePlaneActors[index]->SetMapper(mapper);
-        m_referencePlaneActors[index]->GetProperty()->SetColor(
-            colors[index][0],
-            colors[index][1],
-            colors[index][2]);
-        m_referencePlaneActors[index]->GetProperty()->SetOpacity(0.22);
-        m_referencePlaneActors[index]->GetProperty()->SetAmbient(1.0);
-        m_referencePlaneActors[index]->GetProperty()->SetDiffuse(0.0);
-        m_referenceRenderer->AddActor(m_referencePlaneActors[index]);
+            auto mapper = vtkSmartPointer<vtkPolyDataMapper>::New();
+            mapper->SetInputConnection(m_referenceSliceLineSources[planeIndex][segmentIndex]->GetOutputPort());
+
+            m_referenceSliceLineActors[planeIndex][segmentIndex] = vtkSmartPointer<vtkActor>::New();
+            m_referenceSliceLineActors[planeIndex][segmentIndex]->SetMapper(mapper);
+            m_referenceSliceLineActors[planeIndex][segmentIndex]->GetProperty()->SetColor(
+                colors[planeIndex][0],
+                colors[planeIndex][1],
+                colors[planeIndex][2]);
+            m_referenceSliceLineActors[planeIndex][segmentIndex]->GetProperty()->SetAmbient(1.0);
+            m_referenceSliceLineActors[planeIndex][segmentIndex]->GetProperty()->SetDiffuse(0.0);
+            m_referenceSliceLineActors[planeIndex][segmentIndex]->GetProperty()->SetLineWidth(2.0);
+            m_referenceRenderer->AddActor(m_referenceSliceLineActors[planeIndex][segmentIndex]);
+        }
+    }
+}
+
+void VtkMprSceneAdapter::addReferenceCursorActor()
+{
+    if (!m_imageData || !m_referenceRenderer)
+    {
+        return;
     }
 
-    const auto center = centeredCursorPositionWorld();
-    updateReferencePlanes(center);
-    m_referenceRenderer->ResetCamera();
-    m_referenceRenderer->GetActiveCamera()->Azimuth(35.0);
-    m_referenceRenderer->GetActiveCamera()->Elevation(25.0);
-    m_referenceRenderer->ResetCameraClippingRange();
-    if (auto* camera = m_referenceRenderer->GetActiveCamera())
+    double bounds[6];
+    m_imageData->GetBounds(bounds);
+    const double radius = std::max(
+        1.0,
+        std::min({bounds[1] - bounds[0], bounds[3] - bounds[2], bounds[5] - bounds[4]}) * 0.018);
+
+    m_referenceCursorSphereSource = vtkSmartPointer<vtkSphereSource>::New();
+    m_referenceCursorSphereSource->SetRadius(radius);
+    m_referenceCursorSphereSource->SetThetaResolution(18);
+    m_referenceCursorSphereSource->SetPhiResolution(12);
+
+    auto cursorMapper = vtkSmartPointer<vtkPolyDataMapper>::New();
+    cursorMapper->SetInputConnection(m_referenceCursorSphereSource->GetOutputPort());
+
+    m_referenceCursorActor = vtkSmartPointer<vtkActor>::New();
+    m_referenceCursorActor->SetMapper(cursorMapper);
+    m_referenceCursorActor->GetProperty()->SetColor(1.0, 0.93, 0.20);
+    m_referenceCursorActor->GetProperty()->SetAmbient(1.0);
+    m_referenceCursorActor->GetProperty()->SetDiffuse(0.0);
+    m_referenceRenderer->AddActor(m_referenceCursorActor);
+}
+
+void VtkMprSceneAdapter::configureOrientationMarker()
+{
+    if (!m_referenceRenderWindow)
     {
-        m_referenceInitialParallelScale = std::max(camera->GetParallelScale(), 1e-6);
+        return;
     }
+
+    auto* interactor = m_referenceRenderWindow->GetInteractor();
+    if (!interactor)
+    {
+        return;
+    }
+
+    m_referenceOrientationAxes = vtkSmartPointer<vtkAxesActor>::New();
+    m_referenceOrientationAxes->SetXAxisLabelText("R/L");
+    m_referenceOrientationAxes->SetYAxisLabelText("A/P");
+    m_referenceOrientationAxes->SetZAxisLabelText("S/I");
+    m_referenceOrientationAxes->SetTotalLength(1.1, 1.1, 1.1);
+    m_referenceOrientationAxes->SetShaftTypeToLine();
+    m_referenceOrientationAxes->SetCylinderRadius(0.025);
+    m_referenceOrientationAxes->SetConeRadius(0.08);
+    m_referenceOrientationAxes->SetSphereRadius(0.08);
+
+    m_referenceOrientationMarker = vtkSmartPointer<vtkOrientationMarkerWidget>::New();
+    m_referenceOrientationMarker->SetOrientationMarker(m_referenceOrientationAxes);
+    m_referenceOrientationMarker->SetInteractor(interactor);
+    m_referenceOrientationMarker->SetViewport(0.0, 0.0, 0.22, 0.22);
+    m_referenceOrientationMarker->SetEnabled(1);
+    m_referenceOrientationMarker->InteractiveOff();
 }
 
 void VtkMprSceneAdapter::updateReferencePlanes(const MprCursorPositionWorld& cursorPosition)
@@ -590,32 +735,91 @@ void VtkMprSceneAdapter::updateReferencePlanes(const MprCursorPositionWorld& cur
         return;
     }
 
+    m_referenceCursorPosition = cursorPosition;
+
     double bounds[6];
     m_imageData->GetBounds(bounds);
 
-    if (m_referencePlaneSources[0])
+    if (m_referenceSliceLineSources[0][0])
     {
-        m_referencePlaneSources[0]->SetOrigin(cursorPosition.x, bounds[2], bounds[4]);
-        m_referencePlaneSources[0]->SetPoint1(cursorPosition.x, bounds[3], bounds[4]);
-        m_referencePlaneSources[0]->SetPoint2(cursorPosition.x, bounds[2], bounds[5]);
-        m_referencePlaneSources[0]->Update();
+        m_referenceSliceLineSources[0][0]->SetPoint1(cursorPosition.x, bounds[2], bounds[4]);
+        m_referenceSliceLineSources[0][0]->SetPoint2(cursorPosition.x, bounds[3], bounds[4]);
+        m_referenceSliceLineSources[0][1]->SetPoint1(cursorPosition.x, bounds[3], bounds[4]);
+        m_referenceSliceLineSources[0][1]->SetPoint2(cursorPosition.x, bounds[3], bounds[5]);
+        m_referenceSliceLineSources[0][2]->SetPoint1(cursorPosition.x, bounds[3], bounds[5]);
+        m_referenceSliceLineSources[0][2]->SetPoint2(cursorPosition.x, bounds[2], bounds[5]);
+        m_referenceSliceLineSources[0][3]->SetPoint1(cursorPosition.x, bounds[2], bounds[5]);
+        m_referenceSliceLineSources[0][3]->SetPoint2(cursorPosition.x, bounds[2], bounds[4]);
     }
 
-    if (m_referencePlaneSources[1])
+    if (m_referenceSliceLineSources[1][0])
     {
-        m_referencePlaneSources[1]->SetOrigin(bounds[0], cursorPosition.y, bounds[4]);
-        m_referencePlaneSources[1]->SetPoint1(bounds[1], cursorPosition.y, bounds[4]);
-        m_referencePlaneSources[1]->SetPoint2(bounds[0], cursorPosition.y, bounds[5]);
-        m_referencePlaneSources[1]->Update();
+        m_referenceSliceLineSources[1][0]->SetPoint1(bounds[0], cursorPosition.y, bounds[4]);
+        m_referenceSliceLineSources[1][0]->SetPoint2(bounds[1], cursorPosition.y, bounds[4]);
+        m_referenceSliceLineSources[1][1]->SetPoint1(bounds[1], cursorPosition.y, bounds[4]);
+        m_referenceSliceLineSources[1][1]->SetPoint2(bounds[1], cursorPosition.y, bounds[5]);
+        m_referenceSliceLineSources[1][2]->SetPoint1(bounds[1], cursorPosition.y, bounds[5]);
+        m_referenceSliceLineSources[1][2]->SetPoint2(bounds[0], cursorPosition.y, bounds[5]);
+        m_referenceSliceLineSources[1][3]->SetPoint1(bounds[0], cursorPosition.y, bounds[5]);
+        m_referenceSliceLineSources[1][3]->SetPoint2(bounds[0], cursorPosition.y, bounds[4]);
     }
 
-    if (m_referencePlaneSources[2])
+    if (m_referenceSliceLineSources[2][0])
     {
-        m_referencePlaneSources[2]->SetOrigin(bounds[0], bounds[2], cursorPosition.z);
-        m_referencePlaneSources[2]->SetPoint1(bounds[1], bounds[2], cursorPosition.z);
-        m_referencePlaneSources[2]->SetPoint2(bounds[0], bounds[3], cursorPosition.z);
-        m_referencePlaneSources[2]->Update();
+        m_referenceSliceLineSources[2][0]->SetPoint1(bounds[0], bounds[2], cursorPosition.z);
+        m_referenceSliceLineSources[2][0]->SetPoint2(bounds[1], bounds[2], cursorPosition.z);
+        m_referenceSliceLineSources[2][1]->SetPoint1(bounds[1], bounds[2], cursorPosition.z);
+        m_referenceSliceLineSources[2][1]->SetPoint2(bounds[1], bounds[3], cursorPosition.z);
+        m_referenceSliceLineSources[2][2]->SetPoint1(bounds[1], bounds[3], cursorPosition.z);
+        m_referenceSliceLineSources[2][2]->SetPoint2(bounds[0], bounds[3], cursorPosition.z);
+        m_referenceSliceLineSources[2][3]->SetPoint1(bounds[0], bounds[3], cursorPosition.z);
+        m_referenceSliceLineSources[2][3]->SetPoint2(bounds[0], bounds[2], cursorPosition.z);
     }
 
+    for (auto& planeLineSources : m_referenceSliceLineSources)
+    {
+        for (auto& lineSource : planeLineSources)
+        {
+            if (lineSource)
+            {
+                lineSource->Update();
+            }
+        }
+    }
+
+    if (m_referenceCursorSphereSource)
+    {
+        m_referenceCursorSphereSource->SetCenter(cursorPosition.x, cursorPosition.y, cursorPosition.z);
+        m_referenceCursorSphereSource->Update();
+    }
+
+    centerReferenceCameraOnCursor(cursorPosition);
     m_referenceRenderer->ResetCameraClippingRange();
+}
+
+void VtkMprSceneAdapter::centerReferenceCameraOnCursor(const MprCursorPositionWorld& cursorPosition)
+{
+    if (!m_referenceRenderer)
+    {
+        return;
+    }
+
+    auto* camera = m_referenceRenderer->GetActiveCamera();
+    if (!camera)
+    {
+        return;
+    }
+
+    const double* focalPoint = camera->GetFocalPoint();
+    const double* position = camera->GetPosition();
+    const double delta[3] = {
+        cursorPosition.x - focalPoint[0],
+        cursorPosition.y - focalPoint[1],
+        cursorPosition.z - focalPoint[2]};
+
+    camera->SetFocalPoint(cursorPosition.x, cursorPosition.y, cursorPosition.z);
+    camera->SetPosition(
+        position[0] + delta[0],
+        position[1] + delta[1],
+        position[2] + delta[2]);
 }

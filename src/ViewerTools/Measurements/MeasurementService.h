@@ -46,6 +46,8 @@ public:
     void clear();
     /** @brief Replaces committed measurements. */
     void setMeasurements(const QVector<MeasurementAnnotation>& measurements);
+    /** @brief Removes one committed measurement by id. */
+    bool removeMeasurement(const QString& measurementId);
     /** @brief Cancels the active in-progress measurement. */
     void cancelActiveMeasurement();
 

@@ -12,7 +12,11 @@
 class QAction;
 class QComboBox;
 class QMenu;
+class QDockWidget;
+class DatabaseService;
 class IVolumeData;
+class MprMeasurementAnnotationStore;
+class VtkMprAnnotationDock;
 class VtkMprView;
 
 /**
@@ -34,6 +38,8 @@ public:
         int initialWindowWidth,
         std::vector<DicomWindowPreset> dicomWindowPresets = {},
         int activeDicomWindowPresetIndex = -1,
+        QString seriesInstanceUid = {},
+        DatabaseService* databaseService = nullptr,
         QWidget* parent = nullptr);
     ~VtkMprViewerWindow() override;
 
@@ -45,13 +51,17 @@ private:
     void applyToolSelection();
     void syncPresetSelection(int level, int width);
     void setupToolbar();
+    void setupAnnotationDock();
     int comboValueForBuiltInPresetIndex(int index) const;
     int comboValueForDicomPresetIndex(int index) const;
 
 private:
     VtkMprView* m_view{nullptr};
+    QDockWidget* m_annotationDockWidget{nullptr};
+    VtkMprAnnotationDock* m_annotationDock{nullptr};
     QComboBox* m_presetComboBox{nullptr};
     std::unique_ptr<ViewerToolPresentation> m_toolPresentation;
+    std::unique_ptr<MprMeasurementAnnotationStore> m_annotationStore;
     std::vector<DicomWindowPreset> m_dicomWindowPresets;
     int m_activeDicomWindowPresetIndex{-1};
 };

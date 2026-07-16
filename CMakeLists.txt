@@ -198,6 +198,7 @@ if(DICOMVIEWER_ENABLE_VTK)
         InteractionImage
         InteractionStyle
         RenderingImage
+        RenderingAnnotation
         RenderingCore
         RenderingOpenGL2
         RenderingVolumeOpenGL2
@@ -228,6 +229,7 @@ if(DICOMVIEWER_ENABLE_VTK)
         src/VTK/MPR/View/VtkMprView.cpp
         src/VTK/MPR/View/VtkSliceMprPaneView.cpp
         src/VTK/MPR/View/VtkThreeDReferencePaneView.cpp
+        src/VTK/MPR/Window/VtkMprAnnotationDock.cpp
         src/VTK/MPR/Window/VtkMprViewerWindow.cpp
         src/VTK/Camera/VtkVolumeCameraController.cpp
         src/VTK/Presets/VtkVolumeRenderPreset.cpp
@@ -269,6 +271,7 @@ if(DICOMVIEWER_ENABLE_VTK)
         src/VTK/MPR/View/VtkMprView.h
         src/VTK/MPR/View/VtkSliceMprPaneView.h
         src/VTK/MPR/View/VtkThreeDReferencePaneView.h
+        src/VTK/MPR/Window/VtkMprAnnotationDock.h
         src/VTK/MPR/Window/VtkMprViewerWindow.h
         src/VTK/Camera/VtkVolumeCameraController.h
         src/VTK/Presets/VtkVolumeRenderPreset.h
@@ -317,6 +320,7 @@ set(SRC_FILES
     src/Services/AnnotationReportService.cpp
     src/Services/CineFrameCache.cpp
     src/Services/MeasurementAnnotationStore.cpp
+    src/Services/MprMeasurementAnnotationStore.cpp
     src/Services/SeriesPreviewService.cpp
     src/Services/VideoExport/DicomCineFrameProvider.cpp
     src/Services/VideoExport/DicomSeriesFrameProvider.cpp
@@ -420,6 +424,7 @@ set(HEADER_FILES
     src/Services/VideoExport/VideoExportTypes.h
     src/Services/VolumeBuilder.h
     src/Services/MeasurementAnnotationStore.h
+    src/Services/MprMeasurementAnnotationStore.h
     src/Services/VolumeResampleService.h
     src/Utilities/WarningDialog.h
     src/Utilities/WarningDialogService.h

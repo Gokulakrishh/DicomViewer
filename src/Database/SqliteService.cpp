@@ -782,6 +782,228 @@ bool SqliteService::markSliceMeasurementAnnotationDeleted(const QString& annotat
     return query.numRowsAffected() > 0;
 }
 
+bool SqliteService::upsertMprMeasurementAnnotation(const MprMeasurementAnnotationRecord& record)
+{
+    if (record.seriesInstanceUid.isEmpty()
+        || record.planeType.trimmed().isEmpty()
+        || record.measurement.id.isEmpty()
+        || !ensureConnection())
+    {
+        return false;
+    }
+
+    const QDateTime createdAtUtc = record.createdAtUtc.isValid()
+        ? record.createdAtUtc.toUTC()
+        : QDateTime::currentDateTimeUtc();
+    const QDateTime updatedAtUtc = record.updatedAtUtc.isValid()
+        ? record.updatedAtUtc.toUTC()
+        : QDateTime::currentDateTimeUtc();
+    const QString label = record.label.trimmed().isEmpty()
+        ? defaultAnnotationLabel(record.measurement.type)
+        : record.label.trimmed();
+
+    QSqlQuery query(m_connection->database());
+    query.prepare(
+        "INSERT INTO mpr_measurement_annotations ("
+        "annotation_id, series_instance_uid, plane_type, plane_position_mm, measurement_type, points_json, color_hex, "
+        "length_mm, angle_degrees, area_mm2, sample_count, mean_value, stddev_value, min_value, max_value, "
+        "label, body_region, note, created_at, updated_at, is_deleted) "
+        "VALUES ("
+        ":annotation_id, :series_instance_uid, :plane_type, :plane_position_mm, :measurement_type, :points_json, :color_hex, "
+        ":length_mm, :angle_degrees, :area_mm2, :sample_count, :mean_value, :stddev_value, :min_value, :max_value, "
+        ":label, :body_region, :note, :created_at, :updated_at, :is_deleted) "
+        "ON CONFLICT (annotation_id) DO UPDATE SET "
+        "series_instance_uid = EXCLUDED.series_instance_uid, "
+        "plane_type = EXCLUDED.plane_type, "
+        "plane_position_mm = EXCLUDED.plane_position_mm, "
+        "measurement_type = EXCLUDED.measurement_type, "
+        "points_json = EXCLUDED.points_json, "
+        "color_hex = EXCLUDED.color_hex, "
+        "length_mm = EXCLUDED.length_mm, "
+        "angle_degrees = EXCLUDED.angle_degrees, "
+        "area_mm2 = EXCLUDED.area_mm2, "
+        "sample_count = EXCLUDED.sample_count, "
+        "mean_value = EXCLUDED.mean_value, "
+        "stddev_value = EXCLUDED.stddev_value, "
+        "min_value = EXCLUDED.min_value, "
+        "max_value = EXCLUDED.max_value, "
+        "label = CASE "
+        "WHEN mpr_measurement_annotations.label IS NULL OR TRIM(mpr_measurement_annotations.label) = '' "
+        "THEN EXCLUDED.label ELSE mpr_measurement_annotations.label END, "
+        "body_region = CASE "
+        "WHEN EXCLUDED.body_region IS NULL OR TRIM(EXCLUDED.body_region) = '' OR EXCLUDED.body_region = 'Other' "
+        "THEN mpr_measurement_annotations.body_region ELSE EXCLUDED.body_region END, "
+        "note = CASE "
+        "WHEN EXCLUDED.note IS NULL OR TRIM(EXCLUDED.note) = '' "
+        "THEN mpr_measurement_annotations.note ELSE EXCLUDED.note END, "
+        "updated_at = EXCLUDED.updated_at, "
+        "is_deleted = EXCLUDED.is_deleted");
+    query.bindValue(":annotation_id", record.measurement.id);
+    query.bindValue(":series_instance_uid", record.seriesInstanceUid);
+    query.bindValue(":plane_type", record.planeType.trimmed());
+    query.bindValue(":plane_position_mm", record.planePositionMm);
+    query.bindValue(":measurement_type", measurementTypeToString(record.measurement.type));
+    query.bindValue(":points_json", pointsToJson(record.measurement.points));
+    query.bindValue(":color_hex", record.measurement.color.name(QColor::HexRgb));
+    query.bindValue(":length_mm", record.measurement.lengthMm);
+    query.bindValue(":angle_degrees", nullableDouble(record.angleDegrees));
+    query.bindValue(
+        ":area_mm2",
+        record.roiStatistics ? QVariant(record.roiStatistics->areaMm2) : QVariant(QMetaType(QMetaType::Double)));
+    query.bindValue(
+        ":sample_count",
+        record.roiStatistics
+            ? QVariant(record.roiStatistics->sampleCount)
+            : nullableInteger(std::nullopt));
+    query.bindValue(
+        ":mean_value",
+        record.roiStatistics ? QVariant(record.roiStatistics->mean) : QVariant(QMetaType(QMetaType::Double)));
+    query.bindValue(
+        ":stddev_value",
+        record.roiStatistics
+            ? QVariant(record.roiStatistics->standardDeviation)
+            : QVariant(QMetaType(QMetaType::Double)));
+    query.bindValue(
+        ":min_value",
+        record.roiStatistics ? QVariant(record.roiStatistics->minimum) : QVariant(QMetaType(QMetaType::Double)));
+    query.bindValue(
+        ":max_value",
+        record.roiStatistics ? QVariant(record.roiStatistics->maximum) : QVariant(QMetaType(QMetaType::Double)));
+    query.bindValue(":label", label);
+    query.bindValue(":body_region", normalizedBodyRegion(record.bodyRegion));
+    query.bindValue(":note", record.note.trimmed());
+    query.bindValue(":created_at", dateTimeToDatabase(createdAtUtc));
+    query.bindValue(":updated_at", dateTimeToDatabase(updatedAtUtc));
+    query.bindValue(":is_deleted", record.deleted);
+
+    if (!query.exec())
+    {
+        qWarning() << "Failed to save MPR measurement annotation:" << query.lastError().text();
+        return false;
+    }
+
+    return true;
+}
+
+QList<MprMeasurementAnnotationRecord> SqliteService::loadMprMeasurementAnnotations(
+    const QString& seriesInstanceUid)
+{
+    QList<MprMeasurementAnnotationRecord> records;
+    if (seriesInstanceUid.isEmpty() || !ensureConnection())
+    {
+        return records;
+    }
+
+    QSqlQuery query(m_connection->database());
+    query.prepare(
+        "SELECT annotation_id, series_instance_uid, plane_type, plane_position_mm, measurement_type, points_json, color_hex, "
+        "length_mm, angle_degrees, area_mm2, sample_count, mean_value, stddev_value, min_value, max_value, "
+        "label, body_region, note, created_at, updated_at, is_deleted "
+        "FROM mpr_measurement_annotations "
+        "WHERE series_instance_uid = :series_instance_uid AND is_deleted = 0 "
+        "ORDER BY plane_type, plane_position_mm, created_at, annotation_id");
+    query.bindValue(":series_instance_uid", seriesInstanceUid);
+
+    if (!query.exec())
+    {
+        qWarning() << "Failed to load MPR measurement annotations:" << query.lastError().text();
+        return records;
+    }
+
+    while (query.next())
+    {
+        MprMeasurementAnnotationRecord record;
+        record.seriesInstanceUid = query.value("series_instance_uid").toString();
+        record.planeType = query.value("plane_type").toString();
+        record.planePositionMm = query.value("plane_position_mm").toDouble();
+        record.label = query.value("label").toString();
+        record.bodyRegion = query.value("body_region").toString();
+        record.note = query.value("note").toString();
+        record.measurement.id = query.value("annotation_id").toString();
+        record.measurement.type = measurementTypeFromString(query.value("measurement_type").toString());
+        record.measurement.points = pointsFromJson(query.value("points_json").toString());
+        record.measurement.color = QColor(query.value("color_hex").toString());
+        record.measurement.lengthMm = query.value("length_mm").toDouble();
+        record.angleDegrees = optionalDoubleFromQuery(query, "angle_degrees");
+        record.createdAtUtc = dateTimeFromQuery(query, "created_at");
+        record.updatedAtUtc = dateTimeFromQuery(query, "updated_at");
+        record.deleted = query.value("is_deleted").toBool();
+
+        const QVariant sampleCountValue = query.value("sample_count");
+        if (sampleCountValue.isValid() && !sampleCountValue.isNull())
+        {
+            RoiStatistics stats;
+            stats.valid = true;
+            stats.sampleCount = sampleCountValue.toInt();
+            stats.mean = query.value("mean_value").toDouble();
+            stats.standardDeviation = query.value("stddev_value").toDouble();
+            stats.minimum = query.value("min_value").toDouble();
+            stats.maximum = query.value("max_value").toDouble();
+            stats.areaMm2 = query.value("area_mm2").toDouble();
+            record.roiStatistics = stats;
+        }
+
+        records.append(record);
+    }
+
+    return records;
+}
+
+bool SqliteService::markMprMeasurementAnnotationDeleted(const QString& annotationId)
+{
+    if (annotationId.isEmpty() || !ensureConnection())
+    {
+        return false;
+    }
+
+    QSqlQuery query(m_connection->database());
+    query.prepare(
+        "UPDATE mpr_measurement_annotations "
+        "SET is_deleted = 1, updated_at = :updated_at "
+        "WHERE annotation_id = :annotation_id");
+    query.bindValue(":updated_at", dateTimeToDatabase(QDateTime::currentDateTimeUtc()));
+    query.bindValue(":annotation_id", annotationId);
+
+    if (!query.exec())
+    {
+        qWarning() << "Failed to soft-delete MPR measurement annotation:" << query.lastError().text();
+        return false;
+    }
+
+    return query.numRowsAffected() > 0;
+}
+
+bool SqliteService::updateMprMeasurementAnnotationMetadata(
+    const QString& annotationId,
+    const QString& label,
+    const QString& bodyRegion,
+    const QString& note)
+{
+    if (annotationId.trimmed().isEmpty() || !ensureConnection())
+    {
+        return false;
+    }
+
+    QSqlQuery query(m_connection->database());
+    query.prepare(
+        "UPDATE mpr_measurement_annotations "
+        "SET label = :label, body_region = :body_region, note = :note, updated_at = :updated_at "
+        "WHERE annotation_id = :annotation_id AND is_deleted = 0");
+    query.bindValue(":label", label.trimmed());
+    query.bindValue(":body_region", normalizedBodyRegion(bodyRegion));
+    query.bindValue(":note", note.trimmed());
+    query.bindValue(":updated_at", dateTimeToDatabase(QDateTime::currentDateTimeUtc()));
+    query.bindValue(":annotation_id", annotationId.trimmed());
+
+    if (!query.exec())
+    {
+        qWarning() << "Failed to update MPR annotation metadata:" << query.lastError().text();
+        return false;
+    }
+
+    return query.numRowsAffected() > 0;
+}
+
 AnnotationReportSummaryBySeries SqliteService::loadSeriesAnnotationReportSummaries(
     const QList<QString>& seriesInstanceUids)
 {
@@ -1250,6 +1472,29 @@ bool SqliteService::createTables()
         "created_at TEXT NOT NULL DEFAULT (STRFTIME('%Y-%m-%dT%H:%M:%fZ', 'now')),"
         "updated_at TEXT NOT NULL DEFAULT (STRFTIME('%Y-%m-%dT%H:%M:%fZ', 'now')),"
         "is_deleted INTEGER NOT NULL DEFAULT 0"
+        ")",
+        "CREATE TABLE IF NOT EXISTS mpr_measurement_annotations ("
+        "annotation_id TEXT PRIMARY KEY,"
+        "series_instance_uid TEXT NOT NULL REFERENCES series(series_instance_uid) ON DELETE CASCADE,"
+        "plane_type TEXT NOT NULL,"
+        "plane_position_mm REAL NOT NULL,"
+        "measurement_type TEXT NOT NULL,"
+        "points_json TEXT NOT NULL,"
+        "color_hex TEXT NOT NULL,"
+        "length_mm REAL,"
+        "angle_degrees REAL,"
+        "area_mm2 REAL,"
+        "sample_count INTEGER,"
+        "mean_value REAL,"
+        "stddev_value REAL,"
+        "min_value REAL,"
+        "max_value REAL,"
+        "label TEXT,"
+        "body_region TEXT NOT NULL DEFAULT 'Other',"
+        "note TEXT,"
+        "created_at TEXT NOT NULL DEFAULT (STRFTIME('%Y-%m-%dT%H:%M:%fZ', 'now')),"
+        "updated_at TEXT NOT NULL DEFAULT (STRFTIME('%Y-%m-%dT%H:%M:%fZ', 'now')),"
+        "is_deleted INTEGER NOT NULL DEFAULT 0"
         ")"
     };
 
@@ -1273,7 +1518,13 @@ bool SqliteService::createTables()
         "CREATE INDEX IF NOT EXISTS idx_measurement_annotations_series_sop_frame "
         "ON measurement_annotations(series_instance_uid, sop_instance_uid, frame_index)",
         "CREATE INDEX IF NOT EXISTS idx_measurement_annotations_body_region "
-        "ON measurement_annotations(body_region)"
+        "ON measurement_annotations(body_region)",
+        "CREATE INDEX IF NOT EXISTS idx_mpr_measurement_annotations_series "
+        "ON mpr_measurement_annotations(series_instance_uid)",
+        "CREATE INDEX IF NOT EXISTS idx_mpr_measurement_annotations_series_plane "
+        "ON mpr_measurement_annotations(series_instance_uid, plane_type, plane_position_mm)",
+        "CREATE INDEX IF NOT EXISTS idx_mpr_measurement_annotations_body_region "
+        "ON mpr_measurement_annotations(body_region)"
     };
 
     for (const char* statement : indexStatements)

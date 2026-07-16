@@ -13,10 +13,13 @@ VtkThreeDReferencePaneView::VtkThreeDReferencePaneView(const QString& title, QWi
     layout->setSpacing(4);
 
     m_titleLabel = new QLabel(title, m_rootWidget);
+    m_statusLabel = new QLabel("Spatial navigator - not diagnostic 3D", m_rootWidget);
+    m_statusLabel->setObjectName("mprReferenceStatusLabel");
     m_renderWidget = new QVTKOpenGLNativeWidget(m_rootWidget);
     m_renderWidget->setMinimumSize(240, 240);
 
     layout->addWidget(m_titleLabel);
+    layout->addWidget(m_statusLabel);
     layout->addWidget(m_renderWidget, 1);
 }
 

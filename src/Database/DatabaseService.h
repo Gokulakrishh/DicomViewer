@@ -129,6 +129,42 @@ public:
     virtual bool markSliceMeasurementAnnotationDeleted(const QString& annotationId) = 0;
 
     /**
+     * @brief Inserts or updates an MPR measurement annotation.
+     * @param record Annotation record scoped to one series and MPR plane context.
+     * @return True when the annotation was saved.
+     */
+    virtual bool upsertMprMeasurementAnnotation(const MprMeasurementAnnotationRecord& record) = 0;
+
+    /**
+     * @brief Loads active MPR annotations for one series.
+     * @param seriesInstanceUid DICOM Series Instance UID.
+     * @return Non-deleted MPR annotations for the series.
+     */
+    virtual QList<MprMeasurementAnnotationRecord> loadMprMeasurementAnnotations(
+        const QString& seriesInstanceUid) = 0;
+
+    /**
+     * @brief Soft-deletes an MPR annotation.
+     * @param annotationId Stable annotation identifier.
+     * @return True when the annotation was marked deleted.
+     */
+    virtual bool markMprMeasurementAnnotationDeleted(const QString& annotationId) = 0;
+
+    /**
+     * @brief Updates editable metadata for an MPR annotation.
+     * @param annotationId Stable annotation identifier.
+     * @param label User-visible annotation name.
+     * @param bodyRegion Body region/group label.
+     * @param note Optional free-text note.
+     * @return True when metadata was updated.
+     */
+    virtual bool updateMprMeasurementAnnotationMetadata(
+        const QString& annotationId,
+        const QString& label,
+        const QString& bodyRegion,
+        const QString& note = {}) = 0;
+
+    /**
      * @brief Loads annotation summary counts for series rows.
      * @param seriesInstanceUids Series identifiers to summarize.
      * @return Summary map keyed by Series Instance UID.

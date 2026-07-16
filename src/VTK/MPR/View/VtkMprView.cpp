@@ -7,9 +7,12 @@
 #include "VTK/MPR/MprMeasurementScalarSource.h"
 #include "VTK/MPR/View/VtkSliceMprPaneView.h"
 #include "VTK/MPR/View/VtkThreeDReferencePaneView.h"
+#include "Services/MprMeasurementAnnotationStore.h"
 #include "ViewerTools/Measurements/MeasurementAnalyticsService.h"
 #include "ViewerTools/ViewerInputEvent.h"
 
+#include <QDebug>
+#include <QDateTime>
 #include <QMouseEvent>
 #include <QEvent>
 #include <QGridLayout>
@@ -21,10 +24,97 @@
 #include <algorithm>
 #include <utility>
 
+namespace
+{
+QString axisLabelForPlane(MprSlicePlane plane)
+{
+    switch (plane)
+    {
+    case MprSlicePlane::Axial:
+        return QStringLiteral("Z");
+    case MprSlicePlane::Coronal:
+        return QStringLiteral("Y");
+    case MprSlicePlane::Sagittal:
+        return QStringLiteral("X");
+    }
+
+    return QStringLiteral("-");
+}
+
+QString planeTypeToString(MprSlicePlane plane)
+{
+    switch (plane)
+    {
+    case MprSlicePlane::Axial:
+        return QStringLiteral("Axial");
+    case MprSlicePlane::Coronal:
+        return QStringLiteral("Coronal");
+    case MprSlicePlane::Sagittal:
+        return QStringLiteral("Sagittal");
+    }
+
+    return QStringLiteral("MPR");
+}
+
+MprSlicePlane planeTypeFromString(const QString& value)
+{
+    const QString normalizedValue = value.trimmed().toLower();
+    if (normalizedValue == "coronal")
+    {
+        return MprSlicePlane::Coronal;
+    }
+    if (normalizedValue == "sagittal")
+    {
+        return MprSlicePlane::Sagittal;
+    }
+    return MprSlicePlane::Axial;
+}
+
+double axisPositionForPlane(MprSlicePlane plane, const MprCursorPositionWorld& position)
+{
+    switch (plane)
+    {
+    case MprSlicePlane::Axial:
+        return position.z;
+    case MprSlicePlane::Coronal:
+        return position.y;
+    case MprSlicePlane::Sagittal:
+        return position.x;
+    }
+
+    return 0.0;
+}
+
+double axisPositionForPlane(MprSlicePlane plane, const MeasurementPoint& point)
+{
+    switch (plane)
+    {
+    case MprSlicePlane::Axial:
+        return point.z;
+    case MprSlicePlane::Coronal:
+        return point.y;
+    case MprSlicePlane::Sagittal:
+        return point.x;
+    }
+
+    return 0.0;
+}
+
+QString slicePositionText(MprSlicePlane plane, int slice, const MprCursorPositionWorld& position)
+{
+    return QString("Slice: %1 | %2: %3 mm")
+        .arg(slice)
+        .arg(axisLabelForPlane(plane))
+        .arg(axisPositionForPlane(plane, position), 0, 'f', 1);
+}
+}
+
 VtkMprView::VtkMprView(
     std::shared_ptr<IVolumeData> volume,
     int initialWindowLevel,
     int initialWindowWidth,
+    QString seriesInstanceUid,
+    MprMeasurementAnnotationStore* annotationStore,
     QWidget* parent)
     : QWidget(parent),
       m_volume(std::move(volume)),
@@ -34,7 +124,9 @@ VtkMprView::VtkMprView(
       m_sceneAdapter(std::make_unique<VtkMprSceneAdapter>()),
       m_toolAdapter(std::make_unique<MprToolAdapter>(m_controller, *m_sceneAdapter)),
       m_toolController(m_scene, m_controller, m_measurementService, *this, *m_toolAdapter),
-      m_interactionRouter(m_toolController, m_controller)
+      m_interactionRouter(m_toolController, m_controller),
+      m_seriesInstanceUid(std::move(seriesInstanceUid)),
+      m_annotationStore(annotationStore)
 {
     Q_UNUSED(initialWindowLevel);
 
@@ -44,6 +136,8 @@ VtkMprView::VtkMprView(
     configureBindings();
     m_scene.setCursorPosition(m_sceneAdapter->centeredCursorPositionWorld());
     configureSliders();
+    loadPersistedMprAnnotations();
+    publishMprAnnotationRecords();
 }
 
 VtkMprView::~VtkMprView() = default;
@@ -85,6 +179,11 @@ MprToolType VtkMprView::activeTool() const
     return m_scene.activeTool();
 }
 
+QList<MprMeasurementAnnotationRecord> VtkMprView::mprAnnotationRecords() const
+{
+    return currentMprAnnotationRecords();
+}
+
 void VtkMprView::setupUi()
 {
     auto* layout = new QGridLayout(this);
@@ -99,6 +198,7 @@ void VtkMprView::setupUi()
     m_axialPane->renderWidget()->installEventFilter(this);
     m_coronalPane->renderWidget()->installEventFilter(this);
     m_sagittalPane->renderWidget()->installEventFilter(this);
+    m_referencePane->renderWidget()->installEventFilter(this);
 
     layout->addWidget(m_axialPane->widget(), 0, 0);
     layout->addWidget(m_coronalPane->widget(), 0, 1);
@@ -108,6 +208,25 @@ void VtkMprView::setupUi()
 
 bool VtkMprView::eventFilter(QObject* watched, QEvent* event)
 {
+    if (watched == m_referencePane->renderWidget())
+    {
+        switch (event->type())
+        {
+        case QEvent::MouseButtonDblClick:
+            m_sceneAdapter->resetReferenceCamera();
+            event->accept();
+            return true;
+        case QEvent::Wheel:
+        case QEvent::NativeGesture:
+        case QEvent::Gesture:
+            event->accept();
+            return true;
+        default:
+            break;
+        }
+        return QWidget::eventFilter(watched, event);
+    }
+
     if (watched != m_axialPane->renderWidget() &&
         watched != m_coronalPane->renderWidget() &&
         watched != m_sagittalPane->renderWidget())
@@ -261,14 +380,24 @@ void VtkMprView::updatePaneStatusText()
     const QString context = displayContextText();
     const int wl = m_scene.windowLevel();
     const int ww = m_scene.windowWidth();
+    const MprCursorPositionWorld cursorPosition = m_scene.cursorPosition();
 
     m_axialPane->setContextText(context);
     m_coronalPane->setContextText(context);
     m_sagittalPane->setContextText(context);
 
-    m_axialPane->setSliceText(QString("Slice: %1").arg(m_sceneAdapter->currentSlice(MprSlicePlane::Axial)));
-    m_coronalPane->setSliceText(QString("Slice: %1").arg(m_sceneAdapter->currentSlice(MprSlicePlane::Coronal)));
-    m_sagittalPane->setSliceText(QString("Slice: %1").arg(m_sceneAdapter->currentSlice(MprSlicePlane::Sagittal)));
+    m_axialPane->setSliceText(slicePositionText(
+        MprSlicePlane::Axial,
+        m_sceneAdapter->currentSlice(MprSlicePlane::Axial),
+        cursorPosition));
+    m_coronalPane->setSliceText(slicePositionText(
+        MprSlicePlane::Coronal,
+        m_sceneAdapter->currentSlice(MprSlicePlane::Coronal),
+        cursorPosition));
+    m_sagittalPane->setSliceText(slicePositionText(
+        MprSlicePlane::Sagittal,
+        m_sceneAdapter->currentSlice(MprSlicePlane::Sagittal),
+        cursorPosition));
 
     m_axialPane->setWindowLevelText(
         QString("WL: %1 WW: %2")
@@ -354,6 +483,7 @@ bool VtkMprView::handleMeasurementEvent(QObject* watched, QEvent* event, MprSlic
     ViewerInputEvent inputEvent;
     inputEvent.plane = plane;
     inputEvent.widgetSize = widget->size();
+    m_lastMeasurementInputPlane = plane;
 
     switch (event->type())
     {
@@ -432,7 +562,101 @@ MeasurementPoint VtkMprView::measurementPointForInput(const ViewerInputEvent& ev
 
 void VtkMprView::onMeasurementToolUpdated()
 {
+    captureNewMeasurementPlaneContexts();
+    persistNewMprMeasurements();
+    publishMprAnnotationRecords();
     refreshMeasurementOverlays();
+}
+
+void VtkMprView::goToMprAnnotation(const QString& annotationId)
+{
+    if (annotationId.trimmed().isEmpty())
+    {
+        return;
+    }
+
+    const auto it = std::find_if(
+        m_measurementService.measurements().cbegin(),
+        m_measurementService.measurements().cend(),
+        [&annotationId](const MeasurementAnnotation& measurement) {
+            return measurement.id == annotationId;
+        });
+    if (it == m_measurementService.measurements().cend() || it->points.isEmpty())
+    {
+        return;
+    }
+
+    const MeasurementPoint& point = it->points.first();
+    m_scene.setCursorPosition({point.x, point.y, point.z});
+}
+
+void VtkMprView::deleteMprAnnotation(const QString& annotationId)
+{
+    const QString normalizedId = annotationId.trimmed();
+    if (normalizedId.isEmpty())
+    {
+        return;
+    }
+
+    if (m_annotationStore && !m_annotationStore->deleteMprAnnotation(normalizedId))
+    {
+        qWarning() << "Failed to delete MPR annotation" << normalizedId;
+        return;
+    }
+
+    if (m_measurementService.removeMeasurement(normalizedId))
+    {
+        m_measurementPlaneById.remove(normalizedId);
+        m_annotationRecordById.remove(normalizedId);
+        m_persistedMprAnnotationIds.remove(normalizedId);
+        refreshMeasurementOverlays();
+        publishMprAnnotationRecords();
+    }
+}
+
+void VtkMprView::updateMprAnnotationMetadata(
+    const QString& annotationId,
+    const QString& label,
+    const QString& bodyRegion,
+    const QString& note)
+{
+    const QString normalizedId = annotationId.trimmed();
+    if (normalizedId.isEmpty())
+    {
+        return;
+    }
+
+    if (m_annotationStore &&
+        !m_annotationStore->updateMprAnnotationMetadata(normalizedId, label, bodyRegion, note))
+    {
+        qWarning() << "Failed to update MPR annotation metadata" << normalizedId;
+        return;
+    }
+
+    MprMeasurementAnnotationRecord record = m_annotationRecordById.value(normalizedId);
+    if (record.measurement.id.isEmpty())
+    {
+        const auto it = std::find_if(
+            m_measurementService.measurements().cbegin(),
+            m_measurementService.measurements().cend(),
+            [&normalizedId](const MeasurementAnnotation& measurement) {
+                return measurement.id == normalizedId;
+            });
+        if (it == m_measurementService.measurements().cend())
+        {
+            return;
+        }
+        record = toMprAnnotationRecord(
+            *it,
+            m_measurementPlaneById.value(normalizedId, m_lastMeasurementInputPlane));
+    }
+
+    record.label = label.trimmed();
+    record.bodyRegion = bodyRegion.trimmed().isEmpty() ? QStringLiteral("Other") : bodyRegion.trimmed();
+    record.note = note.trimmed();
+    record.updatedAtUtc = QDateTime::currentDateTimeUtc();
+    m_annotationRecordById.insert(normalizedId, record);
+    publishMprAnnotationRecords();
 }
 
 bool VtkMprView::handlePanEvent(QObject* watched, QEvent* event, MprSlicePlane plane)
@@ -568,6 +792,180 @@ QString VtkMprView::measurementLabel(
     return {};
 }
 
+bool VtkMprView::measurementBelongsToCurrentSlice(
+    const MeasurementAnnotation& measurement,
+    MprSlicePlane plane) const
+{
+    if (measurement.points.isEmpty())
+    {
+        return false;
+    }
+
+    const double currentPlanePosition = axisPositionForPlane(plane, m_scene.cursorPosition());
+    const double tolerance = sliceToleranceMm(plane);
+    return std::all_of(
+        measurement.points.cbegin(),
+        measurement.points.cend(),
+        [plane, currentPlanePosition, tolerance](const MeasurementPoint& point) {
+            return std::abs(axisPositionForPlane(plane, point) - currentPlanePosition) <= tolerance;
+        });
+}
+
+double VtkMprView::sliceToleranceMm(MprSlicePlane plane) const
+{
+    if (!m_volume || !m_volume->geometry().isValid())
+    {
+        return 0.01;
+    }
+
+    const auto& spacing = m_volume->geometry().spacing;
+    double axisSpacing = spacing.z;
+    switch (plane)
+    {
+    case MprSlicePlane::Axial:
+        axisSpacing = spacing.z;
+        break;
+    case MprSlicePlane::Coronal:
+        axisSpacing = spacing.y;
+        break;
+    case MprSlicePlane::Sagittal:
+        axisSpacing = spacing.x;
+        break;
+    }
+
+    return std::max(0.01, axisSpacing * 0.5);
+}
+
+void VtkMprView::loadPersistedMprAnnotations()
+{
+    if (!m_annotationStore || m_seriesInstanceUid.trimmed().isEmpty())
+    {
+        return;
+    }
+
+    const QList<MprMeasurementAnnotationRecord> records = m_annotationStore->loadMprAnnotations(m_seriesInstanceUid);
+    QVector<MeasurementAnnotation> measurements;
+    measurements.reserve(records.size());
+    m_measurementPlaneById.clear();
+    m_annotationRecordById.clear();
+    m_persistedMprAnnotationIds.clear();
+
+    for (const MprMeasurementAnnotationRecord& record : records)
+    {
+        if (record.measurement.id.isEmpty())
+        {
+            continue;
+        }
+        measurements.append(record.measurement);
+        m_measurementPlaneById.insert(record.measurement.id, planeTypeFromString(record.planeType));
+        m_annotationRecordById.insert(record.measurement.id, record);
+        m_persistedMprAnnotationIds.insert(record.measurement.id);
+    }
+
+    if (!measurements.isEmpty())
+    {
+        m_measurementService.setMeasurements(measurements);
+        refreshMeasurementOverlays();
+    }
+}
+
+void VtkMprView::captureNewMeasurementPlaneContexts()
+{
+    for (const MeasurementAnnotation& measurement : m_measurementService.measurements())
+    {
+        if (!measurement.id.isEmpty() && !m_measurementPlaneById.contains(measurement.id))
+        {
+            m_measurementPlaneById.insert(measurement.id, m_lastMeasurementInputPlane);
+        }
+    }
+}
+
+void VtkMprView::persistNewMprMeasurements()
+{
+    if (!m_annotationStore || m_seriesInstanceUid.trimmed().isEmpty())
+    {
+        return;
+    }
+
+    for (const MeasurementAnnotation& measurement : m_measurementService.measurements())
+    {
+        if (measurement.id.isEmpty() || m_persistedMprAnnotationIds.contains(measurement.id))
+        {
+            continue;
+        }
+
+        const MprSlicePlane plane = m_measurementPlaneById.value(measurement.id, m_lastMeasurementInputPlane);
+        const MprMeasurementAnnotationRecord record = toMprAnnotationRecord(measurement, plane);
+        if (m_annotationStore->upsertMprAnnotation(record))
+        {
+            m_persistedMprAnnotationIds.insert(measurement.id);
+            m_annotationRecordById.insert(measurement.id, record);
+        }
+        else
+        {
+            qWarning() << "Failed to save MPR annotation" << measurement.id;
+        }
+    }
+}
+
+void VtkMprView::publishMprAnnotationRecords()
+{
+    emit mprAnnotationsChanged(currentMprAnnotationRecords());
+}
+
+QList<MprMeasurementAnnotationRecord> VtkMprView::currentMprAnnotationRecords() const
+{
+    QList<MprMeasurementAnnotationRecord> records;
+    records.reserve(m_measurementService.measurements().size());
+    for (const MeasurementAnnotation& measurement : m_measurementService.measurements())
+    {
+        if (measurement.id.isEmpty())
+        {
+            continue;
+        }
+        MprMeasurementAnnotationRecord record = toMprAnnotationRecord(
+            measurement,
+            m_measurementPlaneById.value(measurement.id, m_lastMeasurementInputPlane));
+        if (const auto storedRecord = m_annotationRecordById.constFind(measurement.id);
+            storedRecord != m_annotationRecordById.constEnd())
+        {
+            record.label = storedRecord->label;
+            record.bodyRegion = storedRecord->bodyRegion;
+            record.note = storedRecord->note;
+            record.createdAtUtc = storedRecord->createdAtUtc;
+            record.updatedAtUtc = storedRecord->updatedAtUtc;
+        }
+        records.append(record);
+    }
+    return records;
+}
+
+MprMeasurementAnnotationRecord VtkMprView::toMprAnnotationRecord(
+    const MeasurementAnnotation& measurement,
+    MprSlicePlane plane) const
+{
+    MprMeasurementAnnotationRecord record;
+    record.seriesInstanceUid = m_seriesInstanceUid;
+    record.planeType = planeTypeToString(plane);
+    record.measurement = measurement;
+    record.label = QString("%1 annotation").arg(record.planeType);
+    record.bodyRegion = QStringLiteral("Other");
+    record.planePositionMm = measurement.points.isEmpty()
+        ? axisPositionForPlane(plane, m_scene.cursorPosition())
+        : axisPositionForPlane(plane, measurement.points.first());
+    if (measurement.type == MeasurementType::Angle)
+    {
+        record.angleDegrees = MeasurementService::angleDegrees(measurement.points);
+    }
+    if (measurement.type == MeasurementType::RectangleRoi)
+    {
+        record.roiStatistics = MeasurementAnalyticsService::rectangleRoiStatistics(
+            measurement,
+            MprMeasurementScalarSource(m_volume.get(), *m_sceneAdapter, plane));
+    }
+    return record;
+}
+
 QVector<DisplayMeasurement> VtkMprView::displayMeasurementsForPane(
     VtkSliceMprPaneView& pane,
     MprSlicePlane plane) const
@@ -651,11 +1049,17 @@ QVector<DisplayMeasurement> VtkMprView::displayMeasurementsForPane(
 
     for (const auto& measurement : m_measurementService.measurements())
     {
-        appendMeasurement(measurement, false);
+        if (measurementBelongsToCurrentSlice(measurement, plane))
+        {
+            appendMeasurement(measurement, false);
+        }
     }
     if (const auto activeMeasurement = m_measurementService.activeMeasurement())
     {
-        appendMeasurement(*activeMeasurement, true);
+        if (measurementBelongsToCurrentSlice(*activeMeasurement, plane))
+        {
+            appendMeasurement(*activeMeasurement, true);
+        }
     }
     return displayMeasurements;
 }
