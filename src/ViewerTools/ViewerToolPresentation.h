@@ -56,6 +56,7 @@ private:
     {
         ViewerToolId id;
         const char* label;
+        const char* iconId;
         QAction* action{nullptr};
     };
 
@@ -65,13 +66,13 @@ private:
 private:
     QActionGroup* m_actionGroup{nullptr};
     std::array<ToolEntry, 7> m_tools{{
-        {ViewerToolId::WindowLevel, "WL/WW", nullptr},
-        {ViewerToolId::Zoom, "Zoom", nullptr},
-        {ViewerToolId::Pan, "Pan", nullptr},
-        {ViewerToolId::Distance, "Distance", nullptr},
-        {ViewerToolId::Polyline, "Polyline", nullptr},
-        {ViewerToolId::Angle, "Angle", nullptr},
-        {ViewerToolId::RectangleRoi, "ROI", nullptr},
+        {ViewerToolId::WindowLevel, "WL/WW", "window-level", nullptr},
+        {ViewerToolId::Zoom, "Zoom", "zoom", nullptr},
+        {ViewerToolId::Pan, "Pan", "pan", nullptr},
+        {ViewerToolId::Distance, "Distance", "distance", nullptr},
+        {ViewerToolId::Polyline, "Polyline", "polyline", nullptr},
+        {ViewerToolId::Angle, "Angle", "angle", nullptr},
+        {ViewerToolId::RectangleRoi, "ROI", "roi", nullptr},
     }};
     std::function<void(std::optional<ViewerToolId>)> m_selectionChangedCallback;
     bool m_notificationPending{false};

@@ -1,5 +1,7 @@
 #include "ViewerTools/ViewerToolPresentation.h"
 
+#include "Utilities/AppIcons.h"
+
 #include <QAction>
 #include <QSignalBlocker>
 #include <QTimer>
@@ -14,6 +16,8 @@ ViewerToolPresentation::ViewerToolPresentation(QToolBar& toolBar, QObject* paren
     for (auto& tool : m_tools)
     {
         tool.action = new QAction(QString::fromUtf8(tool.label), this);
+        tool.action->setIcon(AppIcons::toolbarIcon(QString::fromUtf8(tool.iconId)));
+        tool.action->setToolTip(QString::fromUtf8(tool.label));
         tool.action->setCheckable(true);
         m_actionGroup->addAction(tool.action);
         toolBar.addAction(tool.action);

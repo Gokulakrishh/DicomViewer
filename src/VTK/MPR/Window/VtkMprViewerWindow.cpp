@@ -12,6 +12,7 @@
 #include <QDoubleSpinBox>
 #include <QEvent>
 #include <QLabel>
+#include <QSize>
 #include <QSignalBlocker>
 #include <QToolBar>
 #include <cmath>
@@ -35,6 +36,22 @@ MprSlabMode slabModeFromComboValue(int value)
     case 0:
     default:
         return MprSlabMode::Thin;
+    }
+}
+
+MprSlicePlane obliquePlaneFromComboValue(int value)
+{
+    switch (value)
+    {
+    case 1:
+        return MprSlicePlane::Axial;
+    case 2:
+        return MprSlicePlane::Coronal;
+    case 3:
+        return MprSlicePlane::Sagittal;
+    case 0:
+    default:
+        return MprSlicePlane::Axial;
     }
 }
 }
@@ -88,6 +105,8 @@ void VtkMprViewerWindow::setupToolbar()
 {
     auto* toolbar = addToolBar("MPR Tools");
     toolbar->setMovable(false);
+    toolbar->setIconSize(QSize(24, 24));
+    toolbar->setToolButtonStyle(Qt::ToolButtonIconOnly);
 
     m_presetComboBox = new QComboBox(toolbar);
     m_presetComboBox->addItem("Custom");
@@ -140,6 +159,26 @@ void VtkMprViewerWindow::setupToolbar()
     toolbar->addWidget(m_slabThicknessSpinBox);
     toolbar->addSeparator();
 
+    toolbar->addWidget(new QLabel("Oblique", toolbar));
+    m_obliquePlaneComboBox = new QComboBox(toolbar);
+    m_obliquePlaneComboBox->setToolTip("Controlled Phase C oblique pane");
+    m_obliquePlaneComboBox->addItem("Off", 0);
+    m_obliquePlaneComboBox->addItem("Axial", 1);
+    m_obliquePlaneComboBox->addItem("Coronal", 2);
+    m_obliquePlaneComboBox->addItem("Sagittal", 3);
+    toolbar->addWidget(m_obliquePlaneComboBox);
+
+    m_obliqueAngleSpinBox = new QDoubleSpinBox(toolbar);
+    m_obliqueAngleSpinBox->setToolTip("Controlled oblique tilt angle in degrees");
+    m_obliqueAngleSpinBox->setRange(-45.0, 45.0);
+    m_obliqueAngleSpinBox->setDecimals(1);
+    m_obliqueAngleSpinBox->setSingleStep(1.0);
+    m_obliqueAngleSpinBox->setSuffix(" deg");
+    m_obliqueAngleSpinBox->setValue(0.0);
+    m_obliqueAngleSpinBox->setEnabled(false);
+    toolbar->addWidget(m_obliqueAngleSpinBox);
+    toolbar->addSeparator();
+
     m_toolPresentation = std::make_unique<ViewerToolPresentation>(*toolbar, this);
     m_toolPresentation->setSelectionChangedCallback([this](std::optional<ViewerToolId>) {
         applyToolSelection();
@@ -148,9 +187,12 @@ void VtkMprViewerWindow::setupToolbar()
     connect(m_presetComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &VtkMprViewerWindow::applyWindowPreset);
     connect(m_slabModeComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &VtkMprViewerWindow::applySlabControls);
     connect(m_slabThicknessSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &VtkMprViewerWindow::applySlabControls);
+    connect(m_obliquePlaneComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &VtkMprViewerWindow::applyObliqueControls);
+    connect(m_obliqueAngleSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &VtkMprViewerWindow::applyObliqueControls);
 
     applyToolSelection();
     applySlabControls();
+    applyObliqueControls();
 }
 
 void VtkMprViewerWindow::setupAnnotationDock()
@@ -261,9 +303,45 @@ void VtkMprViewerWindow::applySlabControls()
         return;
     }
 
+    const bool obliqueEnabled = m_obliquePlaneComboBox && m_obliquePlaneComboBox->currentData().toInt() != 0;
+    if (obliqueEnabled && m_slabModeComboBox->currentData().toInt() != 0)
+    {
+        const QSignalBlocker blocker(m_slabModeComboBox);
+        m_slabModeComboBox->setCurrentIndex(m_slabModeComboBox->findData(0));
+    }
+
     const MprSlabMode mode = slabModeFromComboValue(m_slabModeComboBox->currentData().toInt());
-    m_slabThicknessSpinBox->setEnabled(mode != MprSlabMode::Thin);
+    m_slabModeComboBox->setEnabled(!obliqueEnabled);
+    m_slabThicknessSpinBox->setEnabled(!obliqueEnabled && mode != MprSlabMode::Thin);
     m_view->setSlabSettings({mode, m_slabThicknessSpinBox->value()});
+}
+
+void VtkMprViewerWindow::applyObliqueControls()
+{
+    if (!m_view || !m_obliquePlaneComboBox || !m_obliqueAngleSpinBox)
+    {
+        return;
+    }
+
+    const int value = m_obliquePlaneComboBox->currentData().toInt();
+    const bool enabled = value != 0;
+    m_obliqueAngleSpinBox->setEnabled(enabled);
+    if (m_slabModeComboBox)
+    {
+        m_slabModeComboBox->setEnabled(!enabled);
+    }
+
+    if (enabled && m_slabModeComboBox && m_slabModeComboBox->currentData().toInt() != 0)
+    {
+        const QSignalBlocker blocker(m_slabModeComboBox);
+        m_slabModeComboBox->setCurrentIndex(m_slabModeComboBox->findData(0));
+        applySlabControls();
+    }
+
+    m_view->setObliqueSettings({
+        enabled,
+        obliquePlaneFromComboValue(value),
+        enabled ? m_obliqueAngleSpinBox->value() : 0.0});
 }
 
 void VtkMprViewerWindow::syncPresetSelection(int level, int width)

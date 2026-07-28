@@ -19,11 +19,15 @@
 #include <vtkObjectFactory.h>
 #include <vtkOrientationMarkerWidget.h>
 #include <vtkOutlineFilter.h>
+#include <vtkPlane.h>
 #include <vtkPolyDataMapper.h>
 #include <vtkProperty.h>
 #include <vtkRenderer.h>
 #include <vtkRenderWindowInteractor.h>
 #include <vtkResliceCursor.h>
+#include <vtkResliceCursorActor.h>
+#include <vtkResliceCursorLineRepresentation.h>
+#include <vtkResliceCursorPolyDataAlgorithm.h>
 #include <vtkResliceCursorRepresentation.h>
 #include <vtkResliceCursorWidget.h>
 #include <vtkResliceImageViewer.h>
@@ -122,6 +126,8 @@ int vtkSlabModeForMprMode(MprSlabMode mode)
     return VTK_IMAGE_SLAB_MEAN;
 }
 
+constexpr double kPi = 3.14159265358979323846;
+
 void resetSliceCameraToFit(vtkResliceImageViewer& viewer)
 {
     auto* renderer = viewer.GetRenderer();
@@ -134,6 +140,62 @@ void resetSliceCameraToFit(vtkResliceImageViewer& viewer)
     renderer->ResetCameraClippingRange();
 }
 
+using Vector3 = std::array<double, 3>;
+
+Vector3 rotatedAroundAxis(const Vector3& vector, const Vector3& axis, double angleRadians)
+{
+    const double cosAngle = std::cos(angleRadians);
+    const double sinAngle = std::sin(angleRadians);
+    const double dot =
+        vector[0] * axis[0] +
+        vector[1] * axis[1] +
+        vector[2] * axis[2];
+
+    const Vector3 cross = {
+        axis[1] * vector[2] - axis[2] * vector[1],
+        axis[2] * vector[0] - axis[0] * vector[2],
+        axis[0] * vector[1] - axis[1] * vector[0]};
+
+    return {
+        vector[0] * cosAngle + cross[0] * sinAngle + axis[0] * dot * (1.0 - cosAngle),
+        vector[1] * cosAngle + cross[1] * sinAngle + axis[1] * dot * (1.0 - cosAngle),
+        vector[2] * cosAngle + cross[2] * sinAngle + axis[2] * dot * (1.0 - cosAngle)};
+}
+
+std::array<Vector3, 3> canonicalPlaneNormals()
+{
+    return {
+        Vector3{1.0, 0.0, 0.0},
+        Vector3{0.0, -1.0, 0.0},
+        Vector3{0.0, 0.0, 1.0}};
+}
+
+Vector3 obliqueRotationAxisForPlane(MprSlicePlane plane)
+{
+    switch (plane)
+    {
+    case MprSlicePlane::Axial:
+    case MprSlicePlane::Coronal:
+        return {1.0, 0.0, 0.0};
+    case MprSlicePlane::Sagittal:
+        return {0.0, 1.0, 0.0};
+    }
+
+    return {1.0, 0.0, 0.0};
+}
+
+void setCursorPlaneNormals(vtkResliceCursor& cursor, const std::array<Vector3, 3>& normals)
+{
+    for (int index = 0; index < 3; ++index)
+    {
+        if (auto* plane = cursor.GetPlane(index))
+        {
+            plane->SetNormal(normals[index].data());
+        }
+    }
+    cursor.Update();
+}
+
 void disableResliceWidgetInteraction(vtkResliceImageViewer& viewer)
 {
     auto* widget = viewer.GetResliceCursorWidget();
@@ -144,6 +206,21 @@ void disableResliceWidgetInteraction(vtkResliceImageViewer& viewer)
 
     widget->ProcessEventsOff();
     widget->ManagesCursorOff();
+}
+
+void setViewerReslicePlaneNormal(vtkResliceImageViewer& viewer, int planeIndex)
+{
+    auto* widget = viewer.GetResliceCursorWidget();
+    auto* representation = widget
+        ? vtkResliceCursorLineRepresentation::SafeDownCast(widget->GetRepresentation())
+        : nullptr;
+    auto* algorithm = representation
+        ? representation->GetResliceCursorActor()->GetCursorAlgorithm()
+        : nullptr;
+    if (algorithm)
+    {
+        algorithm->SetReslicePlaneNormal(planeIndex);
+    }
 }
 
 void installSliceInputSwallower(
@@ -231,6 +308,7 @@ void VtkMprSceneAdapter::initialize(vtkImageData& imageData, int windowLevel, in
     {
         m_sliceViewers[index]->SetInputData(&imageData);
         m_sliceViewers[index]->SetSliceOrientation(index);
+        setViewerReslicePlaneNormal(*m_sliceViewers[index], index);
         m_sliceViewers[index]->SetResliceModeToAxisAligned();
         m_sliceViewers[index]->SetColorLevel(windowLevel);
         m_sliceViewers[index]->SetColorWindow(windowWidth);
@@ -313,6 +391,7 @@ void VtkMprSceneAdapter::applySlabSettings(const MprSlabSettings& settings)
             ? vtkResliceImageViewer::RESLICE_OBLIQUE
             : vtkResliceImageViewer::RESLICE_AXIS_ALIGNED);
         viewer->SetThickMode(thickMode ? 1 : 0);
+        setViewerReslicePlaneNormal(*viewer, index);
         if (m_neutralInteractorStyles[index])
         {
             installSliceInputSwallower(
@@ -360,6 +439,63 @@ void VtkMprSceneAdapter::applySlabSettings(const MprSlabSettings& settings)
                 *m_neutralInteractorStyles[index],
                 m_sliceInputSwallowCallbacks[index]);
         }
+    }
+
+    applyObliqueSettings(m_obliqueSettings);
+}
+
+void VtkMprSceneAdapter::applyObliqueSettings(const MprObliqueSettings& settings)
+{
+    m_obliqueSettings = settings;
+    const int obliqueIndex = planeIndex(settings.basePlane);
+    const double angleRadians = settings.angleDegrees * kPi / 180.0;
+    const Vector3 rotationAxis = obliqueRotationAxisForPlane(settings.basePlane);
+
+    for (int index = 0; index < 3; ++index)
+    {
+        auto* viewer = m_sliceViewers[index].GetPointer();
+        if (!viewer)
+        {
+            continue;
+        }
+
+        const bool selectedObliquePane = settings.enabled && index == obliqueIndex;
+        setViewerReslicePlaneNormal(*viewer, index);
+        if (m_slabSettings.mode == MprSlabMode::Thin)
+        {
+            viewer->SetResliceMode(selectedObliquePane
+                ? vtkResliceImageViewer::RESLICE_OBLIQUE
+                : vtkResliceImageViewer::RESLICE_AXIS_ALIGNED);
+        }
+
+        if (auto* cursor = viewer->GetResliceCursor())
+        {
+            auto normals = canonicalPlaneNormals();
+            if (selectedObliquePane)
+            {
+                normals[index] = rotatedAroundAxis(normals[index], rotationAxis, angleRadians);
+            }
+            setCursorPlaneNormals(*cursor, normals);
+            cursor->SetCenter(
+                m_referenceCursorPosition.x,
+                m_referenceCursorPosition.y,
+                m_referenceCursorPosition.z);
+        }
+
+        if (m_neutralInteractorStyles[index])
+        {
+            installSliceInputSwallower(
+                *viewer,
+                *m_neutralInteractorStyles[index],
+                m_sliceInputSwallowCallbacks[index]);
+        }
+        else
+        {
+            disableResliceWidgetInteraction(*viewer);
+        }
+
+        resetSliceCameraToFit(*viewer);
+        viewer->Render();
     }
 }
 

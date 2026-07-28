@@ -26,7 +26,6 @@
 #include <QSet>
 #include <QSlider>
 #include <QStatusBar>
-#include <QStyle>
 #include <QStringList>
 #include <QTextCursor>
 #include <QVBoxLayout>
@@ -399,15 +398,15 @@ void DicomMainWindow::initializeDatabaseAndTree()
 
 void DicomMainWindow::setupMenuBar()
 {
-    m_openFileAction = new QAction("Open File", this);
+    m_openFileAction = new QAction(AppIcons::toolbarIcon(QStringLiteral("open-file")), "Open File", this);
     m_ui->fileMenu->addAction(m_openFileAction);
 
-    m_openFolderAction = new QAction("Open Folder", this);
+    m_openFolderAction = new QAction(AppIcons::toolbarIcon(QStringLiteral("open-folder")), "Open Folder", this);
     m_ui->fileMenu->addAction(m_openFolderAction);
 
-    m_openMprAction = new QAction("Open MPR Viewer", this);
+    m_openMprAction = new QAction(AppIcons::toolbarIcon(QStringLiteral("open-mpr")), "Open MPR Viewer", this);
     m_ui->viewMenu->addAction(m_openMprAction);
-    m_openThreeDAction = new QAction("3D", this);
+    m_openThreeDAction = new QAction(AppIcons::toolbarIcon(QStringLiteral("open-3d")), "3D", this);
     m_ui->viewMenu->addAction(m_openThreeDAction);
 
     connect(m_openFileAction, &QAction::triggered, this, &DicomMainWindow::openImage);
@@ -420,6 +419,8 @@ void DicomMainWindow::setupViewerToolbar()
 {
     m_viewerToolBar = addToolBar("Viewer");
     m_viewerToolBar->setMovable(false);
+    m_viewerToolBar->setIconSize(QSize(24, 24));
+    m_viewerToolBar->setToolButtonStyle(Qt::ToolButtonIconOnly);
     m_viewerToolPresentation = std::make_unique<ViewerToolPresentation>(
         *m_viewerToolBar,
         this);
@@ -446,7 +447,7 @@ void DicomMainWindow::setupViewerToolbar()
 
     m_viewerToolBar->addSeparator();
     m_exportCineAction = new QAction(
-        style()->standardIcon(QStyle::SP_DialogSaveButton),
+        AppIcons::toolbarIcon(QStringLiteral("export-cine")),
         QStringLiteral("Export Cine"),
         this);
     m_exportCineAction->setToolTip(QStringLiteral("Export selected cine or slice-series frames"));

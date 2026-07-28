@@ -49,6 +49,8 @@ public:
     void applyWindowLevelWidth(int level, int width);
     /** @brief Applies shared orthogonal slab projection settings to all MPR panes. */
     void applySlabSettings(const MprSlabSettings& settings);
+    /** @brief Applies controlled Phase C oblique settings to the selected pane. */
+    void applyObliqueSettings(const MprObliqueSettings& settings);
     /** @brief Applies zoom to a plane. */
     void zoom(MprSlicePlane plane, const QPointF& normalizedDelta);
     /** @brief Applies pan to a plane. */
@@ -93,6 +95,7 @@ private:
 private:
     vtkImageData* m_imageData{nullptr};
     MprSlabSettings m_slabSettings;
+    MprObliqueSettings m_obliqueSettings;
     vtkSmartPointer<vtkInteractorStyleUser> m_neutralInteractorStyles[3];
     std::array<vtkSmartPointer<vtkCallbackCommand>, 3> m_sliceInputSwallowCallbacks;
     vtkSmartPointer<vtkResliceImageViewer> m_sliceViewers[3];

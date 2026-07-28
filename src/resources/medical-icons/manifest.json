@@ -1,0 +1,212 @@
+[
+  {
+    "id": "open-file",
+    "label": "Open File",
+    "use": "Open single DICOM file",
+    "dark": "dark/open-file.svg",
+    "light": "light/open-file.svg"
+  },
+  {
+    "id": "open-folder",
+    "label": "Open Folder",
+    "use": "Import DICOM folder",
+    "dark": "dark/open-folder.svg",
+    "light": "light/open-folder.svg"
+  },
+  {
+    "id": "window-level",
+    "label": "WL/WW",
+    "use": "Window level / window width",
+    "dark": "dark/window-level.svg",
+    "light": "light/window-level.svg"
+  },
+  {
+    "id": "zoom",
+    "label": "Zoom",
+    "use": "Zoom tool",
+    "dark": "dark/zoom.svg",
+    "light": "light/zoom.svg"
+  },
+  {
+    "id": "pan",
+    "label": "Pan",
+    "use": "Pan tool",
+    "dark": "dark/pan.svg",
+    "light": "light/pan.svg"
+  },
+  {
+    "id": "distance",
+    "label": "Distance",
+    "use": "Point-to-point distance",
+    "dark": "dark/distance.svg",
+    "light": "light/distance.svg"
+  },
+  {
+    "id": "polyline",
+    "label": "Polyline",
+    "use": "Multi-segment line",
+    "dark": "dark/polyline.svg",
+    "light": "light/polyline.svg"
+  },
+  {
+    "id": "angle",
+    "label": "Angle",
+    "use": "Angle measurement",
+    "dark": "dark/angle.svg",
+    "light": "light/angle.svg"
+  },
+  {
+    "id": "roi",
+    "label": "ROI",
+    "use": "Rectangle ROI",
+    "dark": "dark/roi.svg",
+    "light": "light/roi.svg"
+  },
+  {
+    "id": "export-cine",
+    "label": "Export Cine",
+    "use": "MP4 export",
+    "dark": "dark/export-cine.svg",
+    "light": "light/export-cine.svg"
+  },
+  {
+    "id": "open-mpr",
+    "label": "Open MPR",
+    "use": "MPR viewer",
+    "dark": "dark/open-mpr.svg",
+    "light": "light/open-mpr.svg"
+  },
+  {
+    "id": "open-3d",
+    "label": "Open 3D",
+    "use": "3D viewer",
+    "dark": "dark/open-3d.svg",
+    "light": "light/open-3d.svg"
+  },
+  {
+    "id": "play",
+    "label": "Play",
+    "use": "Cine playback",
+    "dark": "dark/play.svg",
+    "light": "light/play.svg"
+  },
+  {
+    "id": "pause",
+    "label": "Pause",
+    "use": "Pause cine",
+    "dark": "dark/pause.svg",
+    "light": "light/pause.svg"
+  },
+  {
+    "id": "stop",
+    "label": "Stop",
+    "use": "Stop cine",
+    "dark": "dark/stop.svg",
+    "light": "light/stop.svg"
+  },
+  {
+    "id": "previous-slice",
+    "label": "Previous frame/slice",
+    "use": "Previous slice/frame",
+    "dark": "dark/previous-slice.svg",
+    "light": "light/previous-slice.svg"
+  },
+  {
+    "id": "next-slice",
+    "label": "Next frame/slice",
+    "use": "Next slice/frame",
+    "dark": "dark/next-slice.svg",
+    "light": "light/next-slice.svg"
+  },
+  {
+    "id": "mpr-slab-mode",
+    "label": "MPR slab mode",
+    "use": "Thin/MIP/MinIP/Average mode group",
+    "dark": "dark/mpr-slab-mode.svg",
+    "light": "light/mpr-slab-mode.svg"
+  },
+  {
+    "id": "slab-thickness",
+    "label": "Slab thickness",
+    "use": "Thickness in mm",
+    "dark": "dark/slab-thickness.svg",
+    "light": "light/slab-thickness.svg"
+  },
+  {
+    "id": "oblique-mode",
+    "label": "Oblique mode",
+    "use": "Oblique plane mode",
+    "dark": "dark/oblique-mode.svg",
+    "light": "light/oblique-mode.svg"
+  },
+  {
+    "id": "oblique-angle",
+    "label": "Oblique angle",
+    "use": "Degree/angle control",
+    "dark": "dark/oblique-angle.svg",
+    "light": "light/oblique-angle.svg"
+  },
+  {
+    "id": "study-browser",
+    "label": "Study Browser",
+    "use": "Study browser dock",
+    "dark": "dark/study-browser.svg",
+    "light": "light/study-browser.svg"
+  },
+  {
+    "id": "annotations",
+    "label": "Annotations",
+    "use": "Annotations dock",
+    "dark": "dark/annotations.svg",
+    "light": "light/annotations.svg"
+  },
+  {
+    "id": "dicom-info",
+    "label": "DICOM Info",
+    "use": "DICOM metadata",
+    "dark": "dark/dicom-info.svg",
+    "light": "light/dicom-info.svg"
+  },
+  {
+    "id": "delete-annotation",
+    "label": "Delete annotation",
+    "use": "Delete selected annotation",
+    "dark": "dark/delete-annotation.svg",
+    "light": "light/delete-annotation.svg"
+  },
+  {
+    "id": "go-to-annotation",
+    "label": "Go to annotation/slice",
+    "use": "Locate selected annotation",
+    "dark": "dark/go-to-annotation.svg",
+    "light": "light/go-to-annotation.svg"
+  },
+  {
+    "id": "edit-label",
+    "label": "Edit label",
+    "use": "Edit annotation label",
+    "dark": "dark/edit-label.svg",
+    "light": "light/edit-label.svg"
+  },
+  {
+    "id": "search",
+    "label": "Search",
+    "use": "Search",
+    "dark": "dark/search.svg",
+    "light": "light/search.svg"
+  },
+  {
+    "id": "expand",
+    "label": "Expand",
+    "use": "Expand tree item",
+    "dark": "dark/expand.svg",
+    "light": "light/expand.svg"
+  },
+  {
+    "id": "collapse",
+    "label": "Collapse",
+    "use": "Collapse tree item",
+    "dark": "dark/collapse.svg",
+    "light": "light/collapse.svg"
+  }
+]

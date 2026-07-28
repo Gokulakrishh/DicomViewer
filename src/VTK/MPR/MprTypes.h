@@ -48,6 +48,20 @@ struct MprSlabSettings
 };
 
 /**
+ * @brief Controlled free-oblique MPR settings for the first Phase C increment.
+ *
+ * The initial implementation keeps oblique reformatting explicit and bounded:
+ * one selected pane may be tilted by a numeric angle while measurement and
+ * annotation semantics remain gated until arbitrary-plane verification exists.
+ */
+struct MprObliqueSettings
+{
+    bool enabled{false};
+    MprSlicePlane basePlane{MprSlicePlane::Axial};
+    double angleDegrees{0.0};
+};
+
+/**
  * @brief Crosshair/cursor position in volume world coordinates.
  */
 struct MprCursorPositionWorld

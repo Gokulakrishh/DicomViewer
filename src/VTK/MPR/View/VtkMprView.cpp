@@ -197,9 +197,42 @@ void VtkMprView::setSlabSettings(const MprSlabSettings& settings)
     m_sceneAdapter->renderAll();
 }
 
+void VtkMprView::setObliqueSettings(const MprObliqueSettings& settings)
+{
+    MprObliqueSettings normalizedSettings = settings;
+    normalizedSettings.angleDegrees = std::clamp(normalizedSettings.angleDegrees, -45.0, 45.0);
+    if (std::abs(normalizedSettings.angleDegrees) <= 0.001)
+    {
+        normalizedSettings.angleDegrees = 0.0;
+    }
+
+    const bool changed = normalizedSettings.enabled != m_obliqueSettings.enabled ||
+        normalizedSettings.basePlane != m_obliqueSettings.basePlane ||
+        std::abs(normalizedSettings.angleDegrees - m_obliqueSettings.angleDegrees) > 0.001;
+    if (!changed)
+    {
+        return;
+    }
+
+    if (normalizedSettings.enabled)
+    {
+        m_measurementService.cancelActiveMeasurement();
+    }
+
+    m_obliqueSettings = normalizedSettings;
+    m_sceneAdapter->applyObliqueSettings(m_obliqueSettings);
+    refreshOverlayState();
+    m_sceneAdapter->renderAll();
+}
+
 MprSlabSettings VtkMprView::slabSettings() const
 {
     return m_slabSettings;
+}
+
+MprObliqueSettings VtkMprView::obliqueSettings() const
+{
+    return m_obliqueSettings;
 }
 
 void VtkMprView::setContextText(const QString& text)
@@ -455,17 +488,23 @@ void VtkMprView::updatePaneStatusText()
         QString("WL: %1 WW: %2")
             .arg(wl)
             .arg(ww));
-    const QString slabText = slabStatusText();
-    m_axialPane->setSlabText(slabText);
-    m_coronalPane->setSlabText(slabText);
-    m_sagittalPane->setSlabText(slabText);
+    m_axialPane->setSlabText(projectionStatusText(MprSlicePlane::Axial));
+    m_coronalPane->setSlabText(projectionStatusText(MprSlicePlane::Coronal));
+    m_sagittalPane->setSlabText(projectionStatusText(MprSlicePlane::Sagittal));
     m_axialPane->setZoomText(QString("Zoom: %1%").arg(m_sceneAdapter->zoomPercent(MprSlicePlane::Axial)));
     m_coronalPane->setZoomText(QString("Zoom: %1%").arg(m_sceneAdapter->zoomPercent(MprSlicePlane::Coronal)));
     m_sagittalPane->setZoomText(QString("Zoom: %1%").arg(m_sceneAdapter->zoomPercent(MprSlicePlane::Sagittal)));
 }
 
-QString VtkMprView::slabStatusText() const
+QString VtkMprView::projectionStatusText(MprSlicePlane plane) const
 {
+    if (m_obliqueSettings.enabled && m_obliqueSettings.basePlane == plane)
+    {
+        return QString("Mode: Oblique %1 | Angle: %2 deg")
+            .arg(planeTypeToString(plane))
+            .arg(m_obliqueSettings.angleDegrees, 0, 'f', 1);
+    }
+
     if (m_slabSettings.mode == MprSlabMode::Thin)
     {
         return QStringLiteral("Mode: Thin Slice");
@@ -540,7 +579,7 @@ bool VtkMprView::handleMeasurementEvent(QObject* watched, QEvent* event, MprSlic
         return false;
     }
 
-    if (m_slabSettings.mode != MprSlabMode::Thin)
+    if (m_slabSettings.mode != MprSlabMode::Thin || m_obliqueSettings.enabled)
     {
         event->accept();
         return true;

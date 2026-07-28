@@ -7,6 +7,7 @@
 #include "ViewerTools/Measurements/MeasurementTool.h"
 #include "ViewerTools/PanTool.h"
 #include "ViewerTools/ViewerInputEvent.h"
+#include "Utilities/AppIcons.h"
 #include "VTK/MainView/DicomMeasurementScalarSource.h"
 #include "VTK/MainView/VtkSliceSceneAdapter.h"
 
@@ -216,6 +217,8 @@ void VtkDiagnosticSliceView::setCineAvailable(bool available)
         m_cinePlayButton->blockSignals(true);
         m_cinePlayButton->setChecked(false);
         m_cinePlayButton->setText("Play");
+        m_cinePlayButton->setIcon(AppIcons::toolbarIcon(QStringLiteral("play")));
+        m_cinePlayButton->setToolTip("Play cine");
         m_cinePlayButton->blockSignals(false);
     }
 }
@@ -225,6 +228,8 @@ void VtkDiagnosticSliceView::setCinePlaying(bool playing)
     m_cinePlayButton->blockSignals(true);
     m_cinePlayButton->setChecked(playing);
     m_cinePlayButton->setText(playing ? "Pause" : "Play");
+    m_cinePlayButton->setIcon(AppIcons::toolbarIcon(playing ? QStringLiteral("pause") : QStringLiteral("play")));
+    m_cinePlayButton->setToolTip(playing ? "Pause cine" : "Play cine");
     m_cinePlayButton->blockSignals(false);
 }
 
@@ -835,10 +840,17 @@ void VtkDiagnosticSliceView::buildControls()
     layout->setSpacing(8);
 
     m_cinePlayButton = new QToolButton(m_cineBar);
+    m_cinePlayButton->setObjectName("viewerCinePlayButton");
     m_cinePlayButton->setCheckable(true);
     m_cinePlayButton->setText("Play");
+    m_cinePlayButton->setIcon(AppIcons::toolbarIcon(QStringLiteral("play")));
+    m_cinePlayButton->setIconSize(QSize(24, 24));
+    m_cinePlayButton->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    m_cinePlayButton->setToolTip("Play cine");
     connect(m_cinePlayButton, &QToolButton::toggled, this, [this](bool checked) {
         m_cinePlayButton->setText(checked ? "Pause" : "Play");
+        m_cinePlayButton->setIcon(AppIcons::toolbarIcon(checked ? QStringLiteral("pause") : QStringLiteral("play")));
+        m_cinePlayButton->setToolTip(checked ? "Pause cine" : "Play cine");
         emit cinePlaybackToggled(checked);
     });
 

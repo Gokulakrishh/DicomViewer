@@ -3,6 +3,7 @@
 #include <QIcon>
 #include <QPixmap>
 #include <QSize>
+#include <QString>
 
 /**
  * @brief Central access point for bundled application icons and logos.
@@ -30,6 +31,13 @@ public:
      * @return Scaled logo pixmap, or an empty pixmap if the resource cannot be loaded.
      */
     static QPixmap logoPixmap(const QSize& targetSize);
+
+    /**
+     * @brief Loads a bundled medical toolbar icon for the dark application theme.
+     * @param iconId Stable icon identifier from `src/resources/medical-icons/manifest.json`.
+     * @return Qt icon backed by the compiled SVG resource, or an empty icon if not found.
+     */
+    static QIcon toolbarIcon(const QString& iconId);
 
 private:
     AppIcons() = delete;

@@ -56,7 +56,7 @@ endif()
 # ----------------------------
 # Find dependencies
 # ----------------------------
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Sql Concurrent Network)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Sql Concurrent Network Svg)
 find_package(Qt6 QUIET COMPONENTS Qml Quick QuickWidgets Quick3D)
 message(STATUS "Qt major version: 6")
 
@@ -286,6 +286,7 @@ endif()
 set(SRC_FILES
     src/Main/main.cpp
     src/resources/styles.qrc
+    src/resources/medical-icons/medical-icons.qrc
     src/AI/GeminiAiAssistantService.cpp
     src/AI/QtHttpAiServerClient.cpp
     src/Audit/AuditService.cpp
@@ -468,6 +469,7 @@ target_link_libraries(${PROJECT_NAME}
         Qt6::Sql
         Qt6::Concurrent
         Qt6::Network
+        Qt6::Svg
         PkgConfig::GSTREAMER_CORE
         PkgConfig::GSTREAMER_APP
     	${GDCM_LIBRARIES}

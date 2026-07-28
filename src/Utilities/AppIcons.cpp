@@ -25,3 +25,8 @@ QPixmap AppIcons::logoPixmap(const QSize& targetSize)
 
     return logo.scaled(targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
 }
+
+QIcon AppIcons::toolbarIcon(const QString& iconId)
+{
+    return QIcon(QStringLiteral(":/medical-icons/light/%1.svg").arg(iconId));
+}
