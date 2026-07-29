@@ -194,6 +194,7 @@ if(DICOMVIEWER_ENABLE_VTK)
         FiltersSources
         InteractionWidgets
         GUISupportQt
+        ImagingGeneral
         IOImage
         InteractionImage
         InteractionStyle
